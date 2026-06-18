@@ -2,7 +2,6 @@ package chanlun
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/bambuo/talib"
 )
@@ -22,9 +21,6 @@ import (
 // Engine 是缠论算法的主引擎。
 type Engine struct {
 	config Config
-	mu     sync.RWMutex
-	state  engineState // O(1) 增量状态
-	cache  *Result     // 最近一次结果缓存
 }
 
 // NewEngine 创建一个新的缠论引擎实例。

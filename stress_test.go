@@ -51,11 +51,11 @@ func BenchmarkEngine(b *testing.B) {
 // BenchmarkEngine_Update 基准测试：增量更新性能。
 func BenchmarkEngine_Update(b *testing.B) {
 	// 先处理 10,000 根
-	engine, _ := NewEngine(DefaultConfig())
+	stream, _ := NewStreamEngine(DefaultConfig())
 	klines := generateBenchKlines(10000)
-	_, err := engine.Process(klines)
+	_, err := stream.Init(klines)
 	if err != nil {
-		b.Fatalf("initial Process: %v", err)
+		b.Fatalf("initial Init: %v", err)
 	}
 
 	newKline := Kline{
@@ -69,10 +69,7 @@ func BenchmarkEngine_Update(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := engine.Update(newKline)
-		if err != nil {
-			b.Fatalf("Update failed: %v", err)
-		}
+		stream.AddKline(newKline)
 	}
 }
 

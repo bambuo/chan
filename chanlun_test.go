@@ -825,17 +825,18 @@ func TestEngine_ShortData_ReturnsError(t *testing.T) {
 }
 
 func TestEngine_Update_Incremental(t *testing.T) {
-	engine, err := NewEngine(DefaultConfig())
+	// 使用 StreamEngine 进行增量更新
+	stream, err := NewStreamEngine(DefaultConfig())
 	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
+		t.Fatalf("NewStreamEngine: %v", err)
 	}
 
 	// 初始数据
 	klines := generateFractalKlines(200)
 
-	result1, err := engine.Process(klines)
+	result1, err := stream.Init(klines)
 	if err != nil {
-		t.Fatalf("initial Process failed: %v", err)
+		t.Fatalf("initial Init failed: %v", err)
 	}
 	_ = result1
 
@@ -849,14 +850,18 @@ func TestEngine_Update_Incremental(t *testing.T) {
 		Close:      last.Close + 1,
 		BaseVolume: 1000,
 	}
-	result2, err := engine.Update(newKline)
-	if err != nil {
-		t.Fatalf("Update failed: %v", err)
+	inc := stream.AddKline(newKline)
+	if inc == nil {
+		t.Fatal("AddKline returned nil")
 	}
 
 	// 增量更新后应该有结果
-	if len(result2.Fractals) < 2 {
-		t.Errorf("expected >=2 fractals after update, got %d", len(result2.Fractals))
+	snap := inc.Snapshot
+	if snap == nil {
+		t.Fatal("Snapshot is nil")
+	}
+	if len(snap.Fractals) < 2 {
+		t.Errorf("expected >=2 fractals after update, got %d", len(snap.Fractals))
 	}
 }
 
@@ -1001,28 +1006,28 @@ func TestSegment_GapBased_Case1_Case2(t *testing.T) {
 		t.Errorf("Case 1: expected BreakStd (1), got %d", segments[0].BreakType)
 	}
 
-		// Case 2: 向上线段，特征序列（向下笔）出现顶分型但第一、二元素有缺口 → 需二次确认 (BreakStroke)
-		//
-		// 理论流程（第67课）：
-		//   1. 第一特征序列（向下笔）: s2↓(14,10), s4↓(18,16), s6↓(11,7)
-		//      s4 为顶分型中间: H=18>max(14,11)✓, L=16>max(10,7)✓
-		//      s2-s4 有缺口: s2.High(14) < s4.Low(16) → gapPending
-		//   2. 从 s4 极点开始形成新（试探性）向下线段
-		//      新线段的特征序列 = 向上笔: s5↑(25,18), s7↑(20,12), s9↑(23,16)
-		//      s7 为底分型中间: L=12<min(18,16)✓, H=20<min(25,23)✓
-		//   3. 新特征序列出现底分型 → 确认原线段在 s4 极点处结束
-		bisCase2 := []MergedBi{
-			makeBi(DirUp, 0, 3, 20, 12),     // s1↑
-			makeBi(DirDown, 3, 6, 14, 10),   // s2↓ (特征元素1)
-			makeBi(DirUp, 6, 9, 22, 14),     // s3↑
-			makeBi(DirDown, 9, 12, 18, 16),  // s4↓ (特征元素2, 顶分型中间, 与s2有缺口)
-			makeBi(DirUp, 12, 15, 25, 18),   // s5↑ (新特征序列元素1)
-			makeBi(DirDown, 15, 18, 11, 7),  // s6↓ (特征元素3)
-			makeBi(DirUp, 18, 21, 20, 12),   // s7↑ (新特征序列元素2, 底分型中间)
-			makeBi(DirDown, 21, 24, 13, 9),  // s8↓
-			makeBi(DirUp, 24, 27, 23, 16),   // s9↑ (新特征序列元素3)
-			makeBi(DirDown, 27, 30, 10, 6),  // s10↓
-		}
+	// Case 2: 向上线段，特征序列（向下笔）出现顶分型但第一、二元素有缺口 → 需二次确认 (BreakStroke)
+	//
+	// 理论流程（第67课）：
+	//   1. 第一特征序列（向下笔）: s2↓(14,10), s4↓(18,16), s6↓(11,7)
+	//      s4 为顶分型中间: H=18>max(14,11)✓, L=16>max(10,7)✓
+	//      s2-s4 有缺口: s2.High(14) < s4.Low(16) → gapPending
+	//   2. 从 s4 极点开始形成新（试探性）向下线段
+	//      新线段的特征序列 = 向上笔: s5↑(25,18), s7↑(20,12), s9↑(23,16)
+	//      s7 为底分型中间: L=12<min(18,16)✓, H=20<min(25,23)✓
+	//   3. 新特征序列出现底分型 → 确认原线段在 s4 极点处结束
+	bisCase2 := []MergedBi{
+		makeBi(DirUp, 0, 3, 20, 12),    // s1↑
+		makeBi(DirDown, 3, 6, 14, 10),  // s2↓ (特征元素1)
+		makeBi(DirUp, 6, 9, 22, 14),    // s3↑
+		makeBi(DirDown, 9, 12, 18, 16), // s4↓ (特征元素2, 顶分型中间, 与s2有缺口)
+		makeBi(DirUp, 12, 15, 25, 18),  // s5↑ (新特征序列元素1)
+		makeBi(DirDown, 15, 18, 11, 7), // s6↓ (特征元素3)
+		makeBi(DirUp, 18, 21, 20, 12),  // s7↑ (新特征序列元素2, 底分型中间)
+		makeBi(DirDown, 21, 24, 13, 9), // s8↓
+		makeBi(DirUp, 24, 27, 23, 16),  // s9↑ (新特征序列元素3)
+		makeBi(DirDown, 27, 30, 10, 6), // s10↓
+	}
 	segments2 := BuildSegments(bisCase2)
 	if len(segments2) == 0 {
 		t.Fatal("expected at least 1 segment for Case 2")
