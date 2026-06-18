@@ -133,9 +133,10 @@ func buildBiFromRange(candles []Candle, start, end Fractal, dir Direction) Bi {
 // 笔包含的定义：
 //   笔 A 包含笔 B：笔 A 的高点 > 笔 B 的高点，且笔 A 的低点 < 笔 B 的低点
 //
-// 处理规则：
-//   - 向上笔序列中：取高高（max(H)）、高低（max(L)）
-//   - 向下笔序列中：取低高（min(H)）、低低（min(L)）
+// 处理规则（与 K 线包含处理逻辑一致）：
+//   方向由最近非包含笔对的关系确定
+//   - 向上序列中：取高高（max(H)）、高低（max(L)）
+//   - 向下序列中：取低高（min(H)）、低低（min(L)）
 func MergeBis(bis []Bi) []MergedBi {
 	if len(bis) < 2 {
 		result := make([]MergedBi, len(bis))
@@ -167,7 +168,9 @@ func MergeBis(bis []Bi) []MergedBi {
 		// 同方向：检查包含关系
 		if isBiContained(curr, last.Bi) {
 			// 当前笔被最后一笔包含，需要合并
-			merged := mergeBiPair(last.Bi, curr)
+			// 方向由最近非包含笔对关系确定（而非笔自身方向）
+			dir := determineBiDirection(result)
+			merged := mergeBiPair(last.Bi, curr, dir)
 			last.Bi = merged
 			last.OriginalCount++
 			last.MergedFrom = append(last.MergedFrom, biIdx)
@@ -178,7 +181,8 @@ func MergeBis(bis []Bi) []MergedBi {
 		// 检查反向包含：最后一笔是否被当前笔包含
 		if isBiContained(last.Bi, curr) {
 			// 最后一笔被当前笔包含，替换它
-			merged := mergeBiPair(curr, last.Bi)
+			dir := determineBiDirection(result[:len(result)-1])
+			merged := mergeBiPair(curr, last.Bi, dir)
 			result[len(result)-1] = MergedBi{
 				Bi:            merged,
 				OriginalCount: last.OriginalCount + 1,
@@ -207,26 +211,33 @@ func isBiContained(a, b Bi) bool {
 }
 
 // mergeBiPair 合并两支同向笔。
-// 向上笔：取高高（max(H)）、高低（max(L)）
-// 向下笔：取低高（min(H)）、低低（min(L)）
-func mergeBiPair(a, b Bi) Bi {
+// dir 由非包含笔对的方向确定（而非笔自身方向）。
+//   - DirUp:   向上处理 → 取高高（max(H)）、高低（max(L)）
+//   - DirDown: 向下处理 → 取低高（min(H)）、低低（min(L)）
+func mergeBiPair(a, b Bi, dir Direction) Bi {
 	merged := a
 	merged.EndIndex = maxInt(a.EndIndex, b.EndIndex)
 	merged.EndPrice = b.EndPrice
 
-	if merged.KLineCount < b.KLineCount {
-		merged.KLineCount = b.KLineCount
-	}
 	// 重新计算 K 线数量为覆盖范围
 	merged.KLineCount = merged.EndIndex - merged.StartIndex + 1
 
-	switch a.Direction {
+	switch dir {
 	case DirUp:
 		merged.High = max(a.High, b.High)
 		merged.Low = max(a.Low, b.Low)
 	case DirDown:
 		merged.High = min(a.High, b.High)
 		merged.Low = min(a.Low, b.Low)
+	default:
+		// 无法确定方向时，以笔自身方向为准（保守回退）
+		if a.Direction == DirUp {
+			merged.High = max(a.High, b.High)
+			merged.Low = max(a.Low, b.Low)
+		} else {
+			merged.High = min(a.High, b.High)
+			merged.Low = min(a.Low, b.Low)
+		}
 	}
 
 	// 重新计算长度和斜率
@@ -239,4 +250,34 @@ func mergeBiPair(a, b Bi) Bi {
 	}
 
 	return merged
+}
+
+// determineBiDirection 确定笔序列的当前处理方向。
+// 从结果序列末尾向前查找最近的非包含笔对。
+// 返回 1=向上, -1=向下, 0=无法确定。
+//
+// 规则（与 K 线包含处理的 determineDirection 一致）：
+//   向上：当前笔 High > 前一笔 High 且 Low > 前一笔 Low
+//   向下：当前笔 High < 前一笔 High 且 Low < 前一笔 Low
+func determineBiDirection(bis []MergedBi) Direction {
+	if len(bis) < 2 {
+		return DirNone
+	}
+
+	// 从末尾向前查找最近的非包含关系对
+	for i := len(bis) - 1; i >= 1; i-- {
+		prev := bis[i-1].Bi
+		curr := bis[i].Bi
+
+		if !isBiContained(prev, curr) && !isBiContained(curr, prev) {
+			if curr.High > prev.High && curr.Low > prev.Low {
+				return DirUp
+			}
+			if curr.High < prev.High && curr.Low < prev.Low {
+				return DirDown
+			}
+		}
+	}
+
+	return DirNone
 }

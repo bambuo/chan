@@ -94,7 +94,10 @@ func (e *Engine) processInternal(candles []Candle) (*Result, error) {
 				macdResult.MACD, macdResult.Signal, macdResult.Histogram)
 		}
 	}
-	allDeviations := append(deviations, trendDeviations...)
+		allDeviations := append(deviations, trendDeviations...)
+
+		// 用背驰检测结果更新走势完成状态（走势必完美定理）
+		UpdateTrendsWithDeviations(trends, trendDeviations)
 
 	// 步骤 11: 买卖点判定
 	signals := DetectSignals(trends, allDeviations, pivots, segments)

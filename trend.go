@@ -121,15 +121,16 @@ func buildTrend(trendType TrendType, pivots []Pivot, start int) *Trend {
 		trend.EndIndex = curr.EndIndex
 	}
 
-	// 判断走势是否可能已完成
-	// 上涨趋势：最后一个中枢后的离开段出现顶背驰 → IsComplete=true
-	// 下跌趋势：最后一个中枢后的离开段出现底背驰
-	// 此处仅做标记，实际背驰检测在 deviation.go 中完成
+	// 走势是否完成需通过背驰确认（走势必完美定理）
+	// 上涨必以顶背驰结束，下跌必以底背驰结束，盘整必以第三类买卖点结束
+	// 此处仅做初步标记，最终由 deviation.go 中的 DetectTrendDeviations 确认
+	// 并在 engine.go 中调用 MarkTrendComplete 更新
 	if len(trend.Pivots) >= 1 {
 		lastPivot := trend.Pivots[len(trend.Pivots)-1]
 		if lastPivot.State == PivotDestroyed {
-			trend.IsComplete = true
-			trend.CompleteReason = "中枢被第三类买卖点破坏"
+			// 中枢被三买卖点破坏是走势可能完成的信号，但需要背驰最终确认
+			// 标记 CompleteReason 供后续背驰检测参考
+			trend.CompleteReason = "中枢被第三类买卖点破坏（待背驰确认）"
 		}
 	}
 
@@ -143,4 +144,50 @@ func IsTrendComplete(trend *Trend) bool {
 		return false
 	}
 	return trend.IsComplete
+}
+
+// MarkTrendComplete 基于背驰确认标记走势完成。
+//
+// 走势必完美定理：
+//   上涨趋势 → 顶背驰确认完成
+//   下跌趋势 → 底背驰确认完成
+//   盘整     → 第三类买卖点确认完成
+//
+// 调用时机：在 DetectTrendDeviations 发现趋势背驰后调用。
+func MarkTrendComplete(trend *Trend, dev *Deviation) {
+	if trend == nil || dev == nil {
+		return
+	}
+
+	// 验证背驰方向与趋势方向一致
+	if trend.Type == TrendUp && dev.Direction == DirUp {
+		// 上涨趋势 + 顶背驰 → 完成
+		trend.IsComplete = true
+		trend.CompleteReason = "顶背驰确认完成"
+	} else if trend.Type == TrendDown && dev.Direction == DirDown {
+		// 下跌趋势 + 底背驰 → 完成
+		trend.IsComplete = true
+		trend.CompleteReason = "底背驰确认完成"
+	} else if trend.Type == RangeOnly && trend.Pivots[0].State == PivotDestroyed {
+		// 盘整 + 第三类买卖点 → 完成
+		trend.IsComplete = true
+		trend.CompleteReason = "第三类买卖点确认盘整完成"
+	}
+}
+
+// UpdateTrendsWithDeviations 用背驰检测结果更新走势完成状态。
+// 在 DetectTrendDeviations 之后调用。
+func UpdateTrendsWithDeviations(trends []Trend, trendDeviations []Deviation) {
+	for i := range trends {
+		for _, dev := range trendDeviations {
+			if dev.SegmentAfter != nil {
+				// 检查该背驰是否属于此走势（通过时间范围）
+				if dev.SegmentAfter.EndIndex >= trends[i].StartIndex &&
+					dev.SegmentAfter.EndIndex <= trends[i].EndIndex {
+					MarkTrendComplete(&trends[i], &dev)
+					break // 找到一个即可确认
+				}
+			}
+		}
+	}
 }

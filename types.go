@@ -109,8 +109,8 @@ type BreakType int
 
 const (
 	BreakNone   BreakType = 0 // 未破坏
-	BreakStd    BreakType = 1 // 第一种破坏：特征序列标准破坏
-	BreakStroke BreakType = 2 // 第二种破坏：笔破坏 + 特征序列确认
+	BreakStd    BreakType = 1 // 第一种破坏：特征序列无缺口标准破坏（必然伴随笔破坏）
+	BreakStroke BreakType = 2 // 第二种破坏：特征序列有缺口（需二次特征序列分型确认）
 )
 
 // Segment 表示一个线段。
@@ -144,15 +144,25 @@ const (
 )
 
 // Pivot 表示一个中枢。
+//
+// 字段说明（严格遵循缠论原文定义）：
+//   ZG（中枢高点/中枢上沿）= min(前两个Z段的高点)，中枢形成后不再改变
+//   ZD（中枢低点/中枢下沿）= max(前两个Z段的低点)，中枢形成后不再改变
+//   GG（波动最高点）= max(中枢内所有线段的高点)
+//   DD（波动最低点）= min(中枢内所有线段的低点)
+//   中枢区间 = [ZD, ZG]；波动区间 = [DD, GG]
 type Pivot struct {
 	StartIndex   int        `json:"startIndex"`
 	EndIndex     int        `json:"endIndex"`
-	ZG           float64    `json:"zg"`
-	ZD           float64    `json:"zd"`
+	ZG           float64    `json:"zg"`         // 中枢上沿（不变）
+	ZD           float64    `json:"zd"`         // 中枢下沿（不变）
+	GG           float64    `json:"gg"`         // 波动最高点（随延伸更新）
+	DD           float64    `json:"dd"`         // 波动最低点（随延伸更新）
 	Segments     []Segment  `json:"segments"`
 	OverlapCount int        `json:"overlapCount"`
 	Level        int        `json:"level"`
 	State        PivotState `json:"state"`
+	Direction    Direction  `json:"direction"`  // 中枢方向：向上中枢(Z段=向上段) / 向下中枢(Z段=向下段)
 }
 
 // ──────────────────────────────────────────────

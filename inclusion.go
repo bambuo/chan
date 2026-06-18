@@ -89,34 +89,35 @@ func mergePair(a, b Candle, dir Direction) Candle {
 		t = b.Time
 	}
 
-	switch dir {
-	case DirUp:
-		return Candle{
-			Time:   t,
-			Open:   a.Open, // 保留第一根的开盘价
-			High:   max(a.High, b.High),
-			Low:    max(a.Low, b.Low),
-			Close:  b.Close, // 取最后一根的收盘价
-			Volume: a.Volume + b.Volume,
+		switch dir {
+		case DirUp:
+			return Candle{
+				Time:   t,
+				Open:   a.Open, // 保留第一根的开盘价
+				High:   max(a.High, b.High),
+				Low:    max(a.Low, b.Low),
+				Close:  b.Close, // 取最后一根的收盘价
+				Volume: a.Volume + b.Volume,
+			}
+		case DirDown:
+			return Candle{
+				Time:   t,
+				Open:   a.Open,
+				High:   min(a.High, b.High),
+				Low:    min(a.Low, b.Low),
+				Close:  b.Close,
+				Volume: a.Volume + b.Volume,
+			}
+		default:
+			// 方向无法确定时（如序列最开头两两包含），保留第一根，丢弃当前根
+			// 避免在没有方向信息的情况下做出假设
+			return Candle{
+				Time:   t,
+				Open:   a.Open,
+				High:   a.High,
+				Low:    a.Low,
+				Close:  a.Close,
+				Volume: a.Volume + b.Volume,
+			}
 		}
-	case DirDown:
-		return Candle{
-			Time:   t,
-			Open:   a.Open,
-			High:   min(a.High, b.High),
-			Low:    min(a.Low, b.Low),
-			Close:  b.Close,
-			Volume: a.Volume + b.Volume,
-		}
-	default:
-		// 方向无法确定时使用向上处理（保守策略）
-		return Candle{
-			Time:   t,
-			Open:   a.Open,
-			High:   max(a.High, b.High),
-			Low:    max(a.Low, b.Low),
-			Close:  b.Close,
-			Volume: a.Volume + b.Volume,
-		}
-	}
 }

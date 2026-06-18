@@ -32,10 +32,11 @@ func DetectSignals(trends []Trend, deviations []Deviation, pivots []Pivot, segme
 	}
 
 	// 2. 从中枢破坏检测第三类买卖点
-	for _, p := range pivots {
-		if p.State == PivotDestroyed && len(p.Segments) > 0 {
-			lastSeg := p.Segments[len(p.Segments)-1]
-			sig := detectThirdPoint(lastSeg, p)
+	// 中枢被破坏时，Segments 最后两段为 [离开段, 回抽段]
+	for i := range pivots {
+		p := &pivots[i]
+		if p.State == PivotDestroyed && len(p.Segments) >= 5 {
+			sig := detectThirdPoint(p.Segments[len(p.Segments)-1], *p)
 			if sig != nil {
 				signals = append(signals, *sig)
 			}
@@ -99,21 +100,54 @@ func detectFirstPoint(dev Deviation) *Signal {
 }
 
 // detectThirdPoint 从中枢破坏检测第三类买卖点。
+//
+// 理论定义（两段结构）：
+//   三买 = 线段向上离开中枢(ZG) + 回抽段不触及 ZG
+//   三卖 = 线段向下离开中枢(ZD) + 回抽段不触及 ZD
+//
+// 中枢被破坏时，pivot.Segments 的最后两段为 [离开段, 回抽段]。
+// 第三类买卖点确认位置在回抽段的终点。
 func detectThirdPoint(lastSeg Segment, pivot Pivot) *Signal {
-	sigType := BuyPoint3
-	if lastSeg.Direction == DirDown {
-		sigType = SellPoint3
+	// 回抽段是中枢破坏段列表的最后一段
+	// 它确认了第三类买卖点：回抽不进入中枢区间
+	segs := pivot.Segments
+	if len(segs) < 5 {
+		// 至少需要 3 段形成中枢 + 2 段（离开+回抽）破坏
+		return nil
 	}
 
-	price := lastSeg.Top
-	if lastSeg.Direction == DirDown {
-		price = lastSeg.Bottom
+	leaveSeg := segs[len(segs)-2]   // 离开段
+	pullbackSeg := segs[len(segs)-1] // 回抽段
+
+	// 验证两段方向相反（离开 vs 回抽）
+	if leaveSeg.Direction == pullbackSeg.Direction {
+		return nil
+	}
+
+	sigType := BuyPoint3
+	price := pullbackSeg.Bottom
+	if pullbackSeg.Direction == DirDown {
+		// 向上离开 + 向下回抽 → 三买确认
+		// 回抽段低点不触及 ZG
+		if pullbackSeg.Bottom <= pivot.ZG {
+			return nil // 回抽进入中枢，不是三买
+		}
+		sigType = BuyPoint3
+		price = pullbackSeg.Bottom
+	} else {
+		// 向下离开 + 向上回抽 → 三卖确认
+		// 回抽段高点不触及 ZD
+		if pullbackSeg.Top >= pivot.ZD {
+			return nil // 回抽进入中枢，不是三卖
+		}
+		sigType = SellPoint3
+		price = pullbackSeg.Top
 	}
 
 	return &Signal{
 		Type:     sigType,
 		Level:    "本级别",
-		Index:    lastSeg.EndIndex,
+		Index:    pullbackSeg.EndIndex,
 		Price:    price,
 		Strength: 0.6,
 		Pivot:    &pivot,

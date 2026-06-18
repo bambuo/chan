@@ -26,9 +26,10 @@ import (
 // macdSignal: 信号线值
 // macdHist: 柱状图值
 //
-// 检测两种背驰：
-//   1. 线段背驰：相邻同向线段的力度对比（信号较弱）
-//   2. 走势背驰：a+A+b+B+c 结构中的进入段和离开段对比（信号较强，需有完整中枢结构）
+// 检测线段背驰（盘整背驰 + 潜在趋势背驰）：
+//   相邻同向线段的力度对比，由 MACD 三要素确认。
+//   信号强度分级：走势背驰 > 线段背驰（盘整背驰）> 笔背驰
+//   最终的结构验证（a+A+b+B+c）在 DetectTrendDeviations 中完成。
 func DetectDeviations(segments []Segment, macdMACD, macdSignal, macdHist []float64) []Deviation {
 	if len(segments) < 2 {
 		return nil
@@ -48,6 +49,7 @@ func DetectDeviations(segments []Segment, macdMACD, macdSignal, macdHist []float
 
 			dev := compareSegments(prev, i-1, curr, i, macdMACD, macdSignal, macdHist)
 			if dev != nil {
+				dev.Type = "range" // 线段间背驰，默认为盘整背驰（具体类型由上层决定）
 				deviations = append(deviations, *dev)
 			}
 		}
@@ -155,34 +157,27 @@ func compareSegments(prev Segment, prevIdx int, curr Segment, currIdx int, macdM
 		return nil
 	}
 
-	// 计算力度值（净价格变化幅度 / K线数量）
-	forceBefore := calcForce(prev)
-	forceAfter := calcForce(curr)
+		// 计算力度值（净价格变化幅度 / K线数量）
+		forceBefore := calcForce(prev)
+		forceAfter := calcForce(curr)
 
-	devType := "trend"
-	if prevForceTrend(prev, curr) {
-		devType = "trend"
-	} else {
-		devType = "range"
+			return &Deviation{
+				Type:           "",  // 由调用方设置（"trend" 或 "range"）
+				Level:          SegmentDeviation,
+				Direction:      devDir,
+				SegmentBefore:  &prev,
+				SegmentAfter:   &curr,
+				SegBeforeIdx:   prevIdx,
+				SegAfterIdx:    currIdx,
+				PriceHigh:      curr.Top,
+				ForceBefore:    forceBefore,
+				ForceAfter:     forceAfter,
+				MACDAreaBefore: areaBefore,
+				MACDAreaAfter:  areaAfter,
+				MACDDiffBefore: diffBefore,
+				MACDDiffAfter:  diffAfter,
+			}
 	}
-
-		return &Deviation{
-			Type:           devType,
-			Level:          SegmentDeviation,
-			Direction:      devDir,
-			SegmentBefore:  &prev,
-			SegmentAfter:   &curr,
-			SegBeforeIdx:   prevIdx,
-			SegAfterIdx:    currIdx,
-			PriceHigh:      curr.Top,
-		ForceBefore:    forceBefore,
-		ForceAfter:     forceAfter,
-		MACDAreaBefore: areaBefore,
-		MACDAreaAfter:  areaAfter,
-		MACDDiffBefore: diffBefore,
-		MACDDiffAfter:  diffAfter,
-	}
-}
 
 // calcForce 计算线段的趋势力度。
 // 文档 §7.3: 趋势力度 = 价格变化幅度 / 时间（K 线数量）
@@ -205,15 +200,9 @@ func calcForce(seg Segment) float64 {
 	return netChange / float64(kCount)
 }
 
-// prevForceTrend 判断是否为趋势背驰场景（前段和后段之间至少有一个完整中枢）。
-// 简化判断：取前段和后段之间的价格结构，若存在完整的中枢区间则视为趋势背驰。
-func prevForceTrend(prev, curr Segment) bool {
-	// 当两段之间有足够的价格重叠，表明存在中枢结构
-	overlap := min(prev.Top, curr.Top) - max(prev.Bottom, curr.Bottom)
-	return overlap > 0
-}
-
-// calcMACDArea 计算线段对应的 MACD 柱状图面积（绝对值之和）。
+// ──────────────────────────────────────────────
+// §7.5  区间套定位
+// ──────────────────────────────────────────────
 func calcMACDArea(seg Segment, macdHist []float64) float64 {
 	area := 0.0
 	for i := seg.StartIndex; i <= seg.EndIndex && i < len(macdHist); i++ {
@@ -299,6 +288,10 @@ type MultiLevelDataProvider struct {
 
 // PerformIntervalNesting 执行区间套定位。
 // 从最高级别开始逐级下钻，直到所有级别都确认背驰或某一级别未能确认。
+//
+// 注意：不同级别的 K 线索引空间不同。当前实现假定较高频的数据
+// 具有更多的 K 线，因此使用索引范围作为近似时间对齐手段。
+// 精确实现应使用时间戳进行跨级别对齐。
 func PerformIntervalNesting(provider *MultiLevelDataProvider) *IntervalNestingResult {
 	if provider == nil || len(provider.Levels) < 2 {
 		return nil

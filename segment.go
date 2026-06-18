@@ -77,17 +77,23 @@ func tryBuildSegment(bis []MergedBi, start int) (*Segment, int) {
 // startPos: 从 bis 中的哪个位置开始延伸
 // segStart: 线段的起始 bi 在 bis 中的索引
 //
-// 线段破坏分两种情况（文档 §4.5）：
-//   情况一（特征序列标准破坏）：特征序列经包含处理后出现反向分型 → 立即结束线段
-//   情况二（笔破坏 + 特征序列确认）：笔破坏后需等待后续特征序列出现反向分型
-//     若后续特征序列形成反向分型 → 确认破坏
-//     若未形成 → 笔破坏被线段延伸吞没
+// 线段破坏分两种情况（文档 §4.5，严格遵循缠论原文）：
+//
+//   情况一（特征序列无缺口标准破坏）：
+//     特征序列经包含处理后出现反向分型，且该分型的
+//     第一元素与第二元素之间没有价格缺口（有重叠）。
+//     → 线段立即结束，结束点为该分型的极点位置。
+//
+//   情况二（特征序列有缺口的破坏，需二次确认）：
+//     特征序列出现反向分型，但该分型的第一元素与第二元素
+//     之间存在价格缺口（无重叠）。需等待后续走势形成
+//     新的反向特征序列分型来确认。
+//     → 先标记 gapPending，继续延伸直到第二个确认分型出现。
 func extendSegment(seg Segment, bis []MergedBi, startPos, segStart int) (Segment, int) {
 	pos := startPos
-	strokePending := false
+	gapPending := false // Case 2: 特征序列第一、二元素有缺口，等待二次确认
 
 	// 缓存经包含处理后的特征序列（避免每次全量重算）
-	// 通过增量合并新元素到序列尾部，将 O(n²) 降为 O(n)
 	processedFeatures := make([]FeatureElement, 0, len(seg.FeatureSeq)+16)
 
 	for pos < len(bis) {
@@ -113,31 +119,34 @@ func extendSegment(seg Segment, bis []MergedBi, startPos, segStart int) (Segment
 				Low:      curr.Low,
 			}
 
-			// 笔破坏检查（用加入前的缓存判断）
-			if !strokePending && isStrokeBreakOnFeatures(curr, seg.Direction, processedFeatures) {
-				strokePending = true
-			}
-
 			// 增量更新特征序列缓存
 			seg.FeatureSeq = append(seg.FeatureSeq, newFeat)
 			processedFeatures = mergeFeatureToCache(processedFeatures, newFeat)
 
-			// 检测特征序列分型
+			// 检测特征序列分型（在已包含处理的序列上）
 			if len(processedFeatures) >= 3 {
 				last3 := processedFeatures[len(processedFeatures)-3:]
 				if checkFeatureFractal(last3, seg.Direction) {
-					if !strokePending {
-						// 情况一：特征序列标准破坏
+					// 检查该分型的第一、二元素之间是否存在缺口
+					hasGap := hasFeatureGap(last3[0], last3[1])
+
+					if !hasGap {
+						// 情况一：无缺口 → 特征序列标准破坏，线段立即结束
+						if gapPending {
+							// 这是 Case 2 的二次确认
+							seg.IsBroken = true
+							seg.BreakType = BreakStroke
+							seg.ConfirmIndex = curr.EndIndex
+							return seg, pos + 1
+						}
 						seg.IsBroken = true
 						seg.BreakType = BreakStd
 						seg.ConfirmIndex = curr.EndIndex
 						return seg, pos + 1
 					}
-					// 情况二：笔破坏后特征序列确认
-					seg.IsBroken = true
-					seg.BreakType = BreakStroke
-					seg.ConfirmIndex = curr.EndIndex
-					return seg, pos + 1
+
+					// 情况二：有缺口 → 标记等待二次确认
+					gapPending = true
 				}
 			}
 		}
@@ -288,6 +297,15 @@ func checkFeatureFractal(features []FeatureElement, segDir Direction) bool {
 	}
 
 	return false
+}
+
+// hasFeatureGap 检查两个特征序列元素之间是否存在缺口。
+// 缺口定义：两个相邻特征序列元素的价格范围没有重叠。
+//   - 无重叠（有缺口）：first.High < second.Low 或 second.High < first.Low
+//   - 有重叠（无缺口）：价格范围有交集
+func hasFeatureGap(first, second FeatureElement) bool {
+	// 存在缺口 = 无价格重叠
+	return first.High < second.Low || second.High < first.Low
 }
 
 // isStrokeBreakOnFeatures 检查是否发生笔破坏（文档 §4.5 情况二的先兆）。
