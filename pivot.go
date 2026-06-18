@@ -122,25 +122,57 @@ func determinePivotDirection(s0, s1, s2 Segment) Direction {
 	return DirUp
 }
 
-// calcZGZD 根据中枢形成段计算中枢区间边界。
+// calcZGZD 从中枢构成线段计算中枢区间边界。
 //
-// 文档 §5.1 精确定义：
+// 对齐 chan.py ZS.update_zs_range（笔级精度）：
 //
-//	ZG（中枢上沿）= min(g1, g2) —— 仅前两个 Z 走势段的高点
-//	ZD（中枢下沿）= max(d1, d2) —— 仅前两个 Z 走势段的低点
+//	ZG = min(所有构成笔的 high)  —— 中枢上沿
+//	ZD = max(所有构成笔的 low)   —— 中枢下沿
 //
-// Z 段判定（中线为与中枢方向同向的段）：
-//   - 上涨中枢（s0↓, s1↑, s2↓）：Z段 = s0, s2（第1、3段）
-//   - 下跌中枢（s0↑, s1↓, s2↑）：Z段 = s0, s2（第1、3段）
-//
-// 两种情况下 Z 段均为 s0 和 s2，s1 为反向段，不参与 ZG/ZD 计算。
-// ZG/ZD 在中枢形成后永不改变。
+// 当线段内无笔列表时，回退到线段级 Top/Bottom。
 func calcZGZD(s0, s1, s2 Segment, pivotDir Direction) (zg, zd float64) {
-	// ZG = min(第一个Z段高点, 第二个Z段高点)
+	// 收集三段内的所有笔
+	allBis := collectBisFromSegments([]Segment{s0, s1, s2})
+
+	if len(allBis) > 0 {
+		return calcZGZDFromBis(allBis)
+	}
+
+	// 回退：线段级计算
 	zg = min(s0.Top, s2.Top)
-	// ZD = max(第一个Z段低点, 第二个Z段低点)
 	zd = max(s0.Bottom, s2.Bottom)
 	return
+}
+
+// calcZGZDFromBis 从笔列表计算中枢区间（笔级精度，对齐 chan.py）。
+// ZG = min(所有构成笔的 high)
+// ZD = max(所有构成笔的 low)
+func calcZGZDFromBis(bis []Bi) (zg, zd float64) {
+	if len(bis) == 0 {
+		return 0, 0
+	}
+	zg = bis[0].High
+	zd = bis[0].Low
+	for _, b := range bis[1:] {
+		if b.High < zg {
+			zg = b.High
+		}
+		if b.Low > zd {
+			zd = b.Low
+		}
+	}
+	return
+}
+
+// collectBisFromSegments 从线段列表中收集所有笔。
+func collectBisFromSegments(segments []Segment) []Bi {
+	result := make([]Bi, 0)
+	for _, seg := range segments {
+		for _, mb := range seg.BiList {
+			result = append(result, mb.Bi)
+		}
+	}
+	return result
 }
 
 // extendPivot 尝试延伸中枢。
@@ -282,6 +314,13 @@ func CombinePivots(pivots []Pivot, mode string) []Pivot {
 		last := &result[len(result)-1]
 		curr := &pivots[i]
 
+		// seg_idx 约束（对齐 chan.py ZS.combine）：
+		// 两个中枢的起始线段必须在同一父线段内，否则不合并
+		if !pivotsShareParentSegment(*last, *curr) {
+			result = append(result, *curr)
+			continue
+		}
+
 		if canCombinePivots(*last, *curr, mode) {
 			// 合并：扩大前一个中枢的区间
 			last.ZD = min(last.ZD, curr.ZD)
@@ -316,6 +355,26 @@ func canCombinePivots(p1, p2 Pivot, mode string) bool {
 // hasOverlap 判断两个区间是否有重叠（含相等边界）。
 func hasOverlap(low1, high1, low2, high2 float64) bool {
 	return low1 <= high2 && low2 <= high1
+}
+
+// pivotsShareParentSegment 判断两个中枢是否在同一父线段内（对齐 chan.py ZS.combine 的 seg_idx 检查）。
+// 简化实现：检查两个中枢的线段范围是否连续或重叠。
+// 如果第一个中枢的末段与第二个中枢的首段之间有明显间隔，认为不在同一父线段内。
+func pivotsShareParentSegment(p1, p2 Pivot) bool {
+	if len(p1.Segments) == 0 || len(p2.Segments) == 0 {
+		return true // 无线段信息时默认允许合并
+	}
+
+	lastSegOfP1 := p1.Segments[len(p1.Segments)-1]
+	firstSegOfP2 := p2.Segments[0]
+
+	// 检查两个中枢的线段是否连续（首尾相连或重叠）
+	// 如果 p2 的首段起始索引远大于 p1 的末段结束索引，认为不在同一父线段
+	if firstSegOfP2.StartIndex > lastSegOfP1.EndIndex+2 {
+		return false
+	}
+
+	return true
 }
 
 // calcPivotPeaks 从中枢的线段笔列表中计算波动极值（peak_high, peak_low）。

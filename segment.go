@@ -158,6 +158,13 @@ func extendSegment(seg Segment, bis []MergedBi, startPos, segStart int) (Segment
 				if len(processedFeatures) >= 3 {
 					last3 := processedFeatures[len(processedFeatures)-3:]
 					if checkFeatureFractal(last3, seg.Direction) {
+						// actual_break 检查（对齐 chan.py EigenFX.actual_break）：
+						// 验证第三元素是否真正突破了第二元素的极值
+						if !checkActualBreak(last3, seg.Direction) {
+							// 未实际突破，不确认线段破坏
+							continue
+						}
+
 						hasGap := hasFeatureGap(last3[0], last3[1])
 
 						if !hasGap {
@@ -400,6 +407,27 @@ func checkFeatureFractal(features []FeatureElement, segDir Direction) bool {
 func hasFeatureGap(first, second FeatureElement) bool {
 	// 存在缺口 = 无价格重叠
 	return first.High < second.Low || second.High < first.Low
+}
+
+// checkActualBreak 检查特征序列分型是否实际突破（对齐 chan.py EigenFX.actual_break）。
+//
+// 向上线段的特征序列顶分型：第三元素的 low 应 < 第二元素的 low（实际向下突破）
+// 向下线段的特征序列底分型：第三元素的 high 应 > 第二元素的 high（实际向上突破）
+//
+// 如果第三元素未实际突破第二元素的极值，则可能是假分型，不应确认线段破坏。
+func checkActualBreak(features []FeatureElement, segDir Direction) bool {
+	if len(features) < 3 {
+		return false
+	}
+	second := features[1]
+	third := features[2]
+
+	if segDir == DirUp {
+		// 向上线段：特征序列出现顶分型，第三元素应向下突破第二元素的 low
+		return third.Low < second.Low
+	}
+	// 向下线段：特征序列出现底分型，第三元素应向上突破第二元素的 high
+	return third.High > second.High
 }
 
 // isStrokeBreakOnFeatures 检查是否发生笔破坏（文档 §4.5 情况二的先兆）。

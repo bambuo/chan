@@ -30,28 +30,20 @@ func (s *StreamEngine) tryMergeKline(k Kline) bool {
 
 	switch containDir {
 	case containCombine:
-		// 一字K线不合并
-		if k.High == k.Low && last.Kline.High == last.Kline.Low {
-			node := &mergedNode{Kline: k, pre: last}
-			last.next = node
-			s.mergedTail = node
-			s.mergedCount++
-			return false
-		}
 		if opt.ExcludeIncluded {
 			// exclude_included 模式：被包含的直接跳过
 			return true
 		}
 		dir := s.determineMergeDirection()
-		// 一字K线方向处理
-		if dir == DirUp && (k.High == k.Low || k.High == last.Kline.High) {
+		// 一字K线方向处理（对齐 chan.py）：is一字 AND 价格相同才跳过
+		if dir == DirUp && k.High == k.Low && k.High == last.Kline.High {
 			node := &mergedNode{Kline: k, pre: last}
 			last.next = node
 			s.mergedTail = node
 			s.mergedCount++
 			return false
 		}
-		if dir == DirDown && (k.High == k.Low || k.Low == last.Kline.Low) {
+		if dir == DirDown && k.High == k.Low && k.Low == last.Kline.Low {
 			node := &mergedNode{Kline: k, pre: last}
 			last.next = node
 			s.mergedTail = node

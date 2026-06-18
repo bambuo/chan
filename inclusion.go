@@ -47,22 +47,20 @@ func MergeKlines(klines []Kline, opts ...InclusionOption) []Kline {
 
 		switch containDir {
 		case containCombine:
-			// 一字K线（High==Low）不合并，避免无意义合并
-			if current.High == current.Low && last.High == last.Low {
-				result = append(result, current)
-				continue
-			}
 			if opt.ExcludeIncluded {
 				// exclude_included 模式：被包含的直接跳过
 				continue
 			}
 			dir := determineDirection(result)
-			// 一字K线方向处理：同向合并时跳过更新
-			if dir == DirUp && (current.High == current.Low || current.High == last.High) {
+			// 一字K线方向处理（对齐 chan.py KLine_Combiner.try_add）：
+			// Python 条件：if combine_item.high != combine_item.low or combine_item.high != self.high
+			// 取反（执行合并的条件）：is一字 AND current.High == last.High
+			if dir == DirUp && current.High == current.Low && current.High == last.High {
+				// 一字K且价格相同，跳过合并
 				result = append(result, current)
 				continue
 			}
-			if dir == DirDown && (current.High == current.Low || current.Low == last.Low) {
+			if dir == DirDown && current.High == current.Low && current.Low == last.Low {
 				result = append(result, current)
 				continue
 			}

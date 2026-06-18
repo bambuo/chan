@@ -50,7 +50,7 @@ func (e *Engine) processInternal(klines []Kline) (*Result, error) {
 	// 步骤 3: 笔的构建
 	var bis []Bi
 	if len(biFractals) >= 2 {
-		bis = BuildBis(merged, biFractals, e.config.BiMinKLineCount, e.config.NewBiMinPriceRatio)
+		bis = BuildBisWithConfig(merged, biFractals, e.config)
 	}
 
 	// 步骤 4: 笔的包含处理

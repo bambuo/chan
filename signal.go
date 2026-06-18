@@ -58,10 +58,16 @@ func DetectSignalsWithConfig(trends []Trend, deviations []Deviation, pivots []Pi
 		}
 	}
 
-	// 4. 去重
+	// 4. 盘背一买/一卖 (T1P)（对齐 chan.py treat_pz_bsp1）
+	if targetTypes["1p"] {
+		sigs := detectT1P(segments, pivots, config)
+		signals = append(signals, sigs...)
+	}
+
+	// 5. 去重
 	signals = dedupSignals(signals)
 
-	// 5. 检测买卖点转化和合并
+	// 6. 检测买卖点转化和合并
 	signals = detectMergedSignals(signals, pivots)
 
 	return signals
@@ -167,6 +173,7 @@ func detectFirstPointWithConfig(dev Deviation, pivots []Pivot, config Config, ta
 
 	return &Signal{
 		Type:      sigType,
+		SubType:   SubT1,
 		Level:     levelToString(dev.Level),
 		Index:     index,
 		Price:     price,
@@ -232,6 +239,7 @@ func detectThirdPointWithConfig(lastSeg Segment, pivot Pivot, config Config, tar
 
 	return &Signal{
 		Type:     sigType,
+		SubType:  SubT3A,
 		Level:    "本级别",
 		Index:    pullbackSeg.EndIndex,
 		Price:    price,
@@ -275,6 +283,7 @@ func detectSecondPointsWithConfig(trend Trend, segments []Segment, deviations []
 			if seg.Bottom > lastDev.SegmentAfter.Bottom && targetTypes["2"] {
 				signals = append(signals, Signal{
 					Type:     BuyPoint2,
+					SubType:  SubT2,
 					Level:    "本级别",
 					Index:    seg.EndIndex,
 					Price:    seg.Bottom,
@@ -291,6 +300,7 @@ func detectSecondPointsWithConfig(trend Trend, segments []Segment, deviations []
 			if seg.Top < lastDev.SegmentAfter.Top && targetTypes["2"] {
 				signals = append(signals, Signal{
 					Type:     SellPoint2,
+					SubType:  SubT2,
 					Level:    "本级别",
 					Index:    seg.EndIndex,
 					Price:    seg.Top,
@@ -390,6 +400,7 @@ func detectThirdPoint(lastSeg Segment, pivot Pivot) *Signal {
 
 	return &Signal{
 		Type:     sigType,
+		SubType:  SubT3A,
 		Level:    "本级别",
 		Index:    pullbackSeg.EndIndex,
 		Price:    price,
@@ -428,6 +439,7 @@ func detectSecondPoints(trend Trend, segments []Segment, deviations []Deviation)
 					if seg.Bottom > lastDev.SegmentAfter.Bottom {
 						signals = append(signals, Signal{
 							Type:     BuyPoint2,
+							SubType:  SubT2,
 							Level:    "本级别",
 							Index:    seg.EndIndex,
 							Price:    seg.Bottom,
@@ -444,6 +456,7 @@ func detectSecondPoints(trend Trend, segments []Segment, deviations []Deviation)
 					if seg.Top < lastDev.SegmentAfter.Top {
 						signals = append(signals, Signal{
 							Type:     SellPoint2,
+							SubType:  SubT2,
 							Level:    "本级别",
 							Index:    seg.EndIndex,
 							Price:    seg.Top,
@@ -548,4 +561,73 @@ func minFloat(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+// ──────────────────────────────────────────────
+// T1P: 盘背一买/一卖（对齐 chan.py treat_pz_bsp1）
+// ──────────────────────────────────────────────
+//
+// 当线段最后一个中枢不满足标准一买条件时，检查盘背：
+// 比较最后两笔的力度，若 out_metric <= divergence_rate * in_metric 则产生 T1P。
+func detectT1P(segments []Segment, pivots []Pivot, config Config) []Signal {
+	signals := make([]Signal, 0)
+
+	for _, seg := range segments {
+		if len(seg.BiList) < 3 {
+			continue
+		}
+
+		// 取最后两笔
+		lastBi := seg.BiList[len(seg.BiList)-1].Bi
+		prevBi := seg.BiList[len(seg.BiList)-2].Bi
+
+		// 必须是同向（线段方向）
+		if lastBi.Direction != seg.Direction {
+			continue
+		}
+
+		// 检查是否创新低/高（盘背要求价格创新极值）
+		if seg.Direction == DirDown && lastBi.Low >= prevBi.Low {
+			continue // 下跌线段未创新低
+		}
+		if seg.Direction == DirUp && lastBi.High <= prevBi.High {
+			continue // 上涨线段未创新高
+		}
+
+		// 比较力度（使用简化的振幅比）
+		inAmp := prevBi.Length
+		outAmp := lastBi.Length
+		if inAmp <= 0 {
+			continue
+		}
+
+		divergenceRate := outAmp / inAmp
+		threshold := config.BspDivergenceRate
+		if threshold <= 0 || threshold > 100 {
+			threshold = 1.0 // 默认阈值
+		}
+
+		if divergenceRate <= threshold {
+			sigType := BuyPoint1
+			if seg.Direction == DirUp {
+				sigType = SellPoint1
+			}
+
+			price := lastBi.Low
+			if seg.Direction == DirUp {
+				price = lastBi.High
+			}
+
+			signals = append(signals, Signal{
+				Type:     sigType,
+				SubType:  SubT1P,
+				Level:    "本级别",
+				Index:    lastBi.EndIndex,
+				Price:    price,
+				Strength: 0.4, // 盘背信号弱于趋势背驰
+			})
+		}
+	}
+
+	return signals
 }

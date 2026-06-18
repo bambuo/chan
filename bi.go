@@ -16,10 +16,22 @@ package chanlun
 //   - 向上的笔序列中：取高高（max(H)）、高低（max(L)）
 //   - 向下的笔序列中：取低高（min(H)）、低低（min(L)）
 
-// BuildBis 从分型列表构建笔序列。
-// 分型列表必须已经过同向取极值和间隔过滤处理。
-// 返回的笔序列方向严格交替，且满足最少独立 K 线数要求。
+// BuildBis 从分型列表构建笔序列（向后兼容包装）。
+// 使用 Config 中的笔配置参数进行成笔验证。
 func BuildBis(klines []Kline, fractals []Fractal, minKLineCount int, minPriceRatio float64) []Bi {
+	cfg := DefaultConfig()
+	cfg.BiMinKLineCount = minKLineCount
+	cfg.NewBiMinPriceRatio = minPriceRatio
+	return BuildBisWithConfig(klines, fractals, cfg)
+}
+
+// BuildBisWithConfig 从分型列表构建笔序列（对齐 chan.py BiList 行为）。
+//
+// 成笔三重验证（移植自 chan.py BiList.can_make_bi）：
+//  1. satisfyBiSpan: 分型间距 >= 4（严格）或 >= 3（非严格），支持 gap_as_kl
+//  2. checkFxValid: 分型间价格关系合理（bi_fx_check: half/loss/strict/totally）
+//  3. endIsPeak: 笔端点必须是两分型之间的极值点（bi_end_is_peak）
+func BuildBisWithConfig(klines []Kline, fractals []Fractal, config Config) []Bi {
 	if len(fractals) < 2 {
 		return nil
 	}
@@ -35,7 +47,7 @@ func BuildBis(klines []Kline, fractals []Fractal, minKLineCount int, minPriceRat
 			continue
 		}
 
-		// 检查方向：底分型在前→向上笔，顶分型在前→向下笔
+		// 检查方向
 		var dir Direction
 		if start.Type == BottomFractal && end.Type == TopFractal {
 			dir = DirUp
@@ -45,10 +57,20 @@ func BuildBis(klines []Kline, fractals []Fractal, minKLineCount int, minPriceRat
 			continue
 		}
 
-		// 检查独立 K 线数
-		// 文档 §3.2：分型之间至少间隔 1 根独立 K 线
-		independentKCount := independentKCountBetweenFractals(start, end)
-		if independentKCount < minKLineCount {
+		// ── 检查 1: satisfyBiSpan（移植自 chan.py satisfy_bi_span）──
+		if config.BiAlgo != "fx" {
+			if !satisfyBiSpan(klines, start, end, config.BiStrict, config.GapAsKl) {
+				continue
+			}
+		}
+
+		// ── 检查 2: checkFxValid（移植自 chan.py check_fx_valid）──
+		if !checkFxValid(klines, start, end, config.BiFxCheck) {
+			continue
+		}
+
+		// ── 检查 3: endIsPeak（移植自 chan.py end_is_peak）──
+		if config.BiEndIsPeak && !endIsPeak(klines, start, end) {
 			continue
 		}
 
@@ -56,10 +78,10 @@ func BuildBis(klines []Kline, fractals []Fractal, minKLineCount int, minPriceRat
 		bi := buildBiFromRange(klines, start, end, dir)
 
 		// 新笔标准（严笔）：检查价格变动幅度
-		if minKLineCount >= 5 && minPriceRatio > 0 {
+		if config.BiMinKLineCount >= 5 && config.NewBiMinPriceRatio > 0 {
 			priceDiff := bi.Length
 			avgPrice := (bi.StartPrice + bi.EndPrice) / 2
-			if avgPrice > 0 && priceDiff/avgPrice < minPriceRatio {
+			if avgPrice > 0 && priceDiff/avgPrice < config.NewBiMinPriceRatio {
 				continue
 			}
 		}
@@ -70,6 +92,185 @@ func BuildBis(klines []Kline, fractals []Fractal, minKLineCount int, minPriceRat
 	}
 
 	return bis
+}
+
+// ──────────────────────────────────────────────
+// 成笔验证函数（移植自 chan.py BiList）
+// ──────────────────────────────────────────────
+
+// endIsPeak 检查两个分型之间的 K 线是否不超过终点分型的极值。
+// 移植自 chan.py BiList.py#L216-L235。
+//
+// 底→顶笔（向上笔）：中间 K 线的 high 不能 > 终点顶分型的 high
+// 顶→底笔（向下笔）：中间 K 线的 low 不能 < 终点底分型的 low
+func endIsPeak(klines []Kline, start, end Fractal) bool {
+	if start.Type == BottomFractal {
+		// 底→顶：检查中间 K 线的 high 不超过终点的 high
+		cmpThresh := end.High
+		for i := start.Index + 1; i < end.Index && i < len(klines); i++ {
+			if i < 0 {
+				continue
+			}
+			if klines[i].High > cmpThresh {
+				return false
+			}
+		}
+	} else if start.Type == TopFractal {
+		// 顶→底：检查中间 K 线的 low 不低于终点的 low
+		cmpThresh := end.Low
+		for i := start.Index + 1; i < end.Index && i < len(klines); i++ {
+			if i < 0 {
+				continue
+			}
+			if klines[i].Low < cmpThresh {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// checkFxValid 验证顶底分型间的价格关系是否合理。
+// 移植自 chan.py KLine.py#L45-L97 check_fx_valid。
+//
+// method: "half"(默认) | "loss" | "strict" | "totally"
+//
+// half: 检查分型与前/后一根 K 线的组合高低关系
+// loss: 仅检查分型本身的高低关系
+// strict: 使用三根 K 线范围（含前/后各一根）
+// totally: 要求顶分型的 low > 底分型区域所有 high（完全不重叠）
+func checkFxValid(klines []Kline, start, end Fractal, method string) bool {
+	if start.Index < 0 || start.Index >= len(klines) || end.Index < 0 || end.Index >= len(klines) {
+		return true // 索引越界时默认通过
+	}
+
+	if start.Type == TopFractal {
+		// 顶→底笔
+		var endHigh, startLow float64
+
+		switch method {
+		case "half":
+			// 检查前两 KLC: end 用 pre+自身, start 用自身+next
+			endPreHigh := klineHighAt(klines, end.Index-1)
+			endHigh = max(endPreHigh, end.High)
+			startNextLow := klineLowAt(klines, start.Index+1)
+			startLow = min(start.Low, startNextLow)
+		case "loss":
+			// 仅检查分型本身
+			endHigh = end.High
+			startLow = start.Low
+		case "strict", "totally":
+			// 使用三根 K 线范围
+			endPreHigh := klineHighAt(klines, end.Index-1)
+			endNextHigh := klineHighAt(klines, end.Index+1)
+			endHigh = max(endPreHigh, max(end.High, endNextHigh))
+			startPreLow := klineLowAt(klines, start.Index-1)
+			startNextLow := klineLowAt(klines, start.Index+1)
+			startLow = min(startPreLow, min(start.Low, startNextLow))
+		default:
+			// 默认 half
+			endPreHigh := klineHighAt(klines, end.Index-1)
+			endHigh = max(endPreHigh, end.High)
+			startNextLow := klineLowAt(klines, start.Index+1)
+			startLow = min(start.Low, startNextLow)
+		}
+
+		if method == "totally" {
+			return start.Low > endHigh
+		}
+		return start.High > endHigh && end.Low < startLow
+
+	} else if start.Type == BottomFractal {
+		// 底→顶笔
+		var endLow, startHigh float64
+
+		switch method {
+		case "half":
+			endPreLow := klineLowAt(klines, end.Index-1)
+			endLow = min(endPreLow, end.Low)
+			startNextHigh := klineHighAt(klines, start.Index+1)
+			startHigh = max(start.High, startNextHigh)
+		case "loss":
+			endLow = end.Low
+			startHigh = start.High
+		case "strict", "totally":
+			endPreLow := klineLowAt(klines, end.Index-1)
+			endNextLow := klineLowAt(klines, end.Index+1)
+			endLow = min(endPreLow, min(end.Low, endNextLow))
+			startPreHigh := klineHighAt(klines, start.Index-1)
+			startNextHigh := klineHighAt(klines, start.Index+1)
+			startHigh = max(startPreHigh, max(start.High, startNextHigh))
+		default:
+			endPreLow := klineLowAt(klines, end.Index-1)
+			endLow = min(endPreLow, end.Low)
+			startNextHigh := klineHighAt(klines, start.Index+1)
+			startHigh = max(start.High, startNextHigh)
+		}
+
+		if method == "totally" {
+			return start.High < endLow
+		}
+		return start.Low < endLow && end.High > startHigh
+	}
+
+	return true
+}
+
+// satisfyBiSpan 检查两个分型间距是否满足成笔条件。
+// 移植自 chan.py BiList.py#L149-L176 satisfy_bi_span + get_klc_span。
+//
+// strict 模式: span >= 4（分型中心之间的 K 线索引差）
+// 非严格模式: span >= 3
+// gapAsKl: 每个跳空额外 +1
+func satisfyBiSpan(klines []Kline, start, end Fractal, strict, gapAsKl bool) bool {
+	span := end.Index - start.Index
+
+	if gapAsKl && span < 4 {
+		// 计算跳空数量，每个跳空 +1
+		for i := start.Index; i < end.Index && i < len(klines)-1; i++ {
+			if i < 0 {
+				continue
+			}
+			if hasGapBetween(klines[i], klines[i+1]) {
+				span++
+			}
+		}
+	}
+
+	if strict {
+		return span >= 4
+	}
+	// 非严格模式：span >= 3
+	return span >= 3
+}
+
+// hasGapBetween 判断两根相邻 K 线之间是否有跳空。
+func hasGapBetween(a, b Kline) bool {
+	return a.High < b.Low || a.Low > b.High
+}
+
+// klineHighAt 安全获取指定索引 K 线的 High 值。
+func klineHighAt(klines []Kline, idx int) float64 {
+	if idx >= 0 && idx < len(klines) {
+		return klines[idx].High
+	}
+	// 越界时返回极值，使 max/min 不受影响
+	if idx < 0 {
+		return 0 // 使 max 不受影响
+	}
+	return 0
+}
+
+// klineLowAt 安全获取指定索引 K 线的 Low 值。
+func klineLowAt(klines []Kline, idx int) float64 {
+	if idx >= 0 && idx < len(klines) {
+		return klines[idx].Low
+	}
+	// 越界时返回极值，使 min 不受影响
+	if idx < 0 {
+		return 1e18
+	}
+	return 1e18
 }
 
 // buildBiFromRange 在分型范围内构建一笔。

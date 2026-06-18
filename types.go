@@ -281,9 +281,22 @@ const (
 	SellPoint3 SignalType = -3 // 第三类卖点
 )
 
+// SignalSubType 买卖点子类型（对齐 chan.py BSP_TYPE）。
+type SignalSubType string
+
+const (
+	SubT1  SignalSubType = "1"  // 标准一买/一卖（趋势背驰）
+	SubT1P SignalSubType = "1p" // 盘背一买/一卖（盘整背驰）
+	SubT2  SignalSubType = "2"  // 标准二买/二卖
+	SubT2S SignalSubType = "2s" // 类二买/类二卖
+	SubT3A SignalSubType = "3a" // 三买a/三卖a（下一线段内）
+	SubT3B SignalSubType = "3b" // 三买b/三卖b（当前线段末尾）
+)
+
 // Signal 表示一个买卖点信号。
 type Signal struct {
 	Type      SignalType             `json:"type"`
+	SubType   SignalSubType          `json:"subType,omitempty"` // 子类型（1/1p/2/2s/3a/3b）
 	Level     string                 `json:"level"`
 	Index     int                    `json:"index"`
 	Price     float64                `json:"price"`
