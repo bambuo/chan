@@ -3,17 +3,22 @@ package chanlun
 import "time"
 
 // ──────────────────────────────────────────────
-// §1  K 线数据模型
+// §1  Kline 数据模型
 // ──────────────────────────────────────────────
 
-// Candle 表示一根原始 K 线。
-type Candle struct {
-	Time   time.Time `json:"time"`
-	Open   float64   `json:"open"`
-	High   float64   `json:"high"`
-	Low    float64   `json:"low"`
-	Close  float64   `json:"close"`
-	Volume float64   `json:"volume"`
+// Kline 表示算法层统一使用的 K 线数据结构。
+type Kline struct {
+	Time            time.Time `json:"time"`
+	Open            float64   `json:"open"`
+	High            float64   `json:"high"`
+	Low             float64   `json:"low"`
+	Close           float64   `json:"close"`
+	BaseVolume      float64   `json:"baseVolume"`
+	QuoteVolume     float64   `json:"quoteVolume,omitempty"`
+	Turnover        float64   `json:"turnover,omitempty"`
+	TradeCount      int64     `json:"tradeCount,omitempty"`
+	RawVolumeUnit   string    `json:"rawVolumeUnit,omitempty"`
+	RawTurnoverUnit string    `json:"rawTurnoverUnit,omitempty"`
 }
 
 // ──────────────────────────────────────────────
@@ -39,13 +44,13 @@ type Fractal struct {
 }
 
 // FractalRange 返回分型区间。
-func (f *Fractal) FractalRange(candles []Candle) (lower, upper float64) {
-	if f.Index < 1 || f.Index+1 >= len(candles) {
+func (f *Fractal) FractalRange(klines []Kline) (lower, upper float64) {
+	if f.Index < 1 || f.Index+1 >= len(klines) {
 		return 0, 0
 	}
-	prev := candles[f.Index-1]
-	mid := candles[f.Index]
-	next := candles[f.Index+1]
+	prev := klines[f.Index-1]
+	mid := klines[f.Index]
+	next := klines[f.Index+1]
 	switch f.Type {
 	case TopFractal:
 		lower = max(prev.Low, next.Low)
@@ -75,8 +80,8 @@ type Bi struct {
 	StartIndex int       `json:"startIndex"`
 	EndIndex   int       `json:"endIndex"`
 	Direction  Direction `json:"direction"`
-	StartPrice float64   `json:"start_price"`
-	EndPrice   float64   `json:"end_price"`
+	StartPrice float64   `json:"startPrice"`
+	EndPrice   float64   `json:"endPrice"`
 	High       float64   `json:"high"`
 	Low        float64   `json:"low"`
 	Length     float64   `json:"length"`
@@ -118,7 +123,7 @@ type Segment struct {
 	StartIndex   int              `json:"startIndex"`
 	EndIndex     int              `json:"endIndex"`
 	Direction    Direction        `json:"direction"`
-	BiList       []MergedBi       `json:"bi_list"`
+	BiList       []MergedBi       `json:"biList"`
 	FeatureSeq   []FeatureElement `json:"featureSeq,omitempty"`
 	Top          float64          `json:"top"`
 	Bottom       float64          `json:"bottom"`
@@ -146,23 +151,30 @@ const (
 // Pivot 表示一个中枢。
 //
 // 字段说明（严格遵循缠论原文定义）：
-//   ZG（中枢高点/中枢上沿）= min(前两个Z段的高点)，中枢形成后不再改变
-//   ZD（中枢低点/中枢下沿）= max(前两个Z段的低点)，中枢形成后不再改变
-//   GG（波动最高点）= max(中枢内所有线段的高点)
-//   DD（波动最低点）= min(中枢内所有线段的低点)
-//   中枢区间 = [ZD, ZG]；波动区间 = [DD, GG]
+//
+//	ZG（中枢高点/中枢上沿）= min(前两个Z段的高点)，中枢形成后不再改变
+//	ZD（中枢低点/中枢下沿）= max(前两个Z段的低点)，中枢形成后不再改变
+//	GG（波动最高点）= max(中枢内所有线段的高点)
+//	DD（波动最低点）= min(中枢内所有线段的低点)
+//	中枢区间 = [ZD, ZG]；波动区间 = [DD, GG]
 type Pivot struct {
 	StartIndex   int        `json:"startIndex"`
 	EndIndex     int        `json:"endIndex"`
-	ZG           float64    `json:"zg"`         // 中枢上沿（不变）
-	ZD           float64    `json:"zd"`         // 中枢下沿（不变）
-	GG           float64    `json:"gg"`         // 波动最高点（随延伸更新）
-	DD           float64    `json:"dd"`         // 波动最低点（随延伸更新）
+	ZG           float64    `json:"zg"` // 中枢上沿（不变）
+	ZD           float64    `json:"zd"` // 中枢下沿（不变）
+	GG           float64    `json:"gg"` // 波动最高点（随延伸更新）
+	DD           float64    `json:"dd"` // 波动最低点（随延伸更新）
 	Segments     []Segment  `json:"segments"`
 	OverlapCount int        `json:"overlapCount"`
 	Level        int        `json:"level"`
+	SourceLevel  string     `json:"sourceLevel,omitempty"`
+	IsProxy      bool       `json:"isEngineeringProxy"`
 	State        PivotState `json:"state"`
-	Direction    Direction  `json:"direction"`  // 中枢方向：向上中枢(Z段=向上段) / 向下中枢(Z段=向下段)
+	Direction    Direction  `json:"direction"` // 中枢方向（注意：以 Z 段方向为准）
+	// 上涨中枢（第一段向下→向上→向下，Z段=第1、3段的向下段）→ DirDown
+	// 下跌中枢（第一段向上→向下→向上，Z段=第1、3段的向上段）→ DirUp
+	// 即 Direction 表示 Z 段的同向方向，而非价格趋势方向。
+	// 上涨趋势中的回调中枢标记为 DirDown，下跌趋势中的回升中枢标记为 DirUp。
 }
 
 // ──────────────────────────────────────────────
@@ -173,9 +185,9 @@ type Pivot struct {
 type TrendType int
 
 const (
-	TrendUp    TrendType = 1  // 上涨趋势
-	TrendDown  TrendType = -1 // 下跌趋势
-	RangeOnly  TrendType = 0  // 盘整
+	TrendUp   TrendType = 1  // 上涨趋势
+	TrendDown TrendType = -1 // 下跌趋势
+	RangeOnly TrendType = 0  // 盘整
 )
 
 // Trend 表示一个走势类型。
@@ -206,10 +218,10 @@ type Deviation struct {
 	Type           string         `json:"type"`
 	Level          DeviationLevel `json:"level"`
 	Direction      Direction      `json:"direction"`
-	SegmentBefore  *Segment       `json:"-"`                       // Go API，保留
-	SegmentAfter   *Segment       `json:"-"`                       // Go API，保留
-	SegBeforeIdx   int            `json:"segBefore,omitempty"`      // JSON 用：Segment 在 Result.Segments 中的索引
-	SegAfterIdx    int            `json:"segAfter,omitempty"`       // JSON 用：Segment 在 Result.Segments 中的索引
+	SegmentBefore  *Segment       `json:"-"`                   // Go API，保留
+	SegmentAfter   *Segment       `json:"-"`                   // Go API，保留
+	SegBeforeIdx   int            `json:"segBefore,omitempty"` // JSON 用：Segment 在 Result.Segments 中的索引
+	SegAfterIdx    int            `json:"segAfter,omitempty"`  // JSON 用：Segment 在 Result.Segments 中的索引
 	PriceHigh      float64        `json:"priceHigh"`
 	ForceBefore    float64        `json:"forceBefore"`
 	ForceAfter     float64        `json:"forceAfter"`
@@ -262,15 +274,16 @@ type Signal struct {
 
 // Result 包含一次完整处理的所有中间和最终输出。
 type Result struct {
-	MergedCandles []Candle    `json:"mergedCandles,omitempty"`
-	Fractals      []Fractal   `json:"fractals,omitempty"`
-	Bis           []Bi        `json:"bis,omitempty"`
-	MergedBis     []MergedBi  `json:"mergedBis,omitempty"`
-	Segments      []Segment   `json:"segments,omitempty"`
-	Pivots        []Pivot     `json:"pivots,omitempty"`
-	Trends        []Trend     `json:"trends,omitempty"`
-	Deviations    []Deviation `json:"deviations,omitempty"`
-	Signals       []Signal    `json:"signals,omitempty"`
+	MergedKlines []Kline     `json:"mergedKlines,omitempty"`
+	Fractals     []Fractal   `json:"fractals,omitempty"`
+	BiFractals   []Fractal   `json:"biFractals,omitempty"`
+	Bis          []Bi        `json:"bis,omitempty"`
+	MergedBis    []MergedBi  `json:"mergedBis,omitempty"`
+	Segments     []Segment   `json:"segments,omitempty"`
+	Pivots       []Pivot     `json:"pivots,omitempty"`
+	Trends       []Trend     `json:"trends,omitempty"`
+	Deviations   []Deviation `json:"deviations,omitempty"`
+	Signals      []Signal    `json:"signals,omitempty"`
 }
 
 // ──────────────────────────────────────────────
@@ -279,7 +292,7 @@ type Result struct {
 
 // Config 包含缠论算法的可配置参数。
 type Config struct {
-	BiMinKLineCount      int     `json:"bi_min_klineCount"`
+	BiMinKLineCount      int     `json:"biMinKlineCount"`
 	MACDFastPeriod       int     `json:"macdFastPeriod"`
 	MACDSlowPeriod       int     `json:"macdSlowPeriod"`
 	MACDSignalPeriod     int     `json:"macdSignalPeriod"`
@@ -302,8 +315,8 @@ func DefaultConfig() Config {
 		DIFReturnThreshold:   0.15,       // |DIF| < ATR×0.15 视为回抽到位
 		EnableBiInclusion:    true,
 		EnableMultiLevel:     false,
-		UpdateWindowSize:     300,        // 增量更新时重算最近 300 根
-		NewBiMinPriceRatio:   0.003,      // 新笔标准最小价格变动 0.3%
+		UpdateWindowSize:     300,   // 增量更新时重算最近 300 根
+		NewBiMinPriceRatio:   0.003, // 新笔标准最小价格变动 0.3%
 	}
 }
 

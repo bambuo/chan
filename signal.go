@@ -102,8 +102,9 @@ func detectFirstPoint(dev Deviation) *Signal {
 // detectThirdPoint 从中枢破坏检测第三类买卖点。
 //
 // 理论定义（两段结构）：
-//   三买 = 线段向上离开中枢(ZG) + 回抽段不触及 ZG
-//   三卖 = 线段向下离开中枢(ZD) + 回抽段不触及 ZD
+//
+//	三买 = 线段向上离开中枢(ZG) + 回抽段不触及 ZG
+//	三卖 = 线段向下离开中枢(ZD) + 回抽段不触及 ZD
 //
 // 中枢被破坏时，pivot.Segments 的最后两段为 [离开段, 回抽段]。
 // 第三类买卖点确认位置在回抽段的终点。
@@ -116,7 +117,7 @@ func detectThirdPoint(lastSeg Segment, pivot Pivot) *Signal {
 		return nil
 	}
 
-	leaveSeg := segs[len(segs)-2]   // 离开段
+	leaveSeg := segs[len(segs)-2]    // 离开段
 	pullbackSeg := segs[len(segs)-1] // 回抽段
 
 	// 验证两段方向相反（离开 vs 回抽）
@@ -129,7 +130,7 @@ func detectThirdPoint(lastSeg Segment, pivot Pivot) *Signal {
 	if pullbackSeg.Direction == DirDown {
 		// 向上离开 + 向下回抽 → 三买确认
 		// 回抽段低点不触及 ZG
-		if pullbackSeg.Bottom <= pivot.ZG {
+		if pullbackSeg.Bottom < pivot.ZG {
 			return nil // 回抽进入中枢，不是三买
 		}
 		sigType = BuyPoint3
@@ -137,7 +138,7 @@ func detectThirdPoint(lastSeg Segment, pivot Pivot) *Signal {
 	} else {
 		// 向下离开 + 向上回抽 → 三卖确认
 		// 回抽段高点不触及 ZD
-		if pullbackSeg.Top >= pivot.ZD {
+		if pullbackSeg.Top > pivot.ZD {
 			return nil // 回抽进入中枢，不是三卖
 		}
 		sigType = SellPoint3
@@ -259,7 +260,7 @@ func detectMergedSignals(signals []Signal, pivots []Pivot) []Signal {
 			for _, other := range enhanced {
 				if other.Type == BuyPoint2 {
 					// 二三买合并：信号强度倍增
-					enhanced[i].Strength = maxFloat(enhanced[i].Strength+0.3, 1.0)
+					enhanced[i].Strength = minFloat(enhanced[i].Strength+0.3, 1.0)
 					break
 				}
 			}
@@ -299,8 +300,8 @@ func levelToString(level DeviationLevel) string {
 	}
 }
 
-func maxFloat(a, b float64) float64 {
-	if a > b {
+func minFloat(a, b float64) float64 {
+	if a < b {
 		return a
 	}
 	return b

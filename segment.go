@@ -10,9 +10,10 @@ package chanlun
 //   - 向上线段的特征序列 = 线段内的向下笔序列（第2、4、6...笔）
 //   - 向下线段的特征序列 = 线段内的向上笔序列
 //
-// 线段破坏有两种情况：
-//   - 情况一：特征序列出现标准顶/底分型
-//   - 情况二：笔破坏 + 特征序列确认
+// 线段破坏（文档 §4.6）：
+//   - 情况一（无缺口）：特征序列经包含处理后出现反向分型，第一二元素无缺口
+//     → 向上线段特征序列出现顶分型；向下线段特征序列出现底分型
+//   - 情况二（有缺口）：特征序列分型第一二元素间有缺口，需二次确认
 
 // BuildSegments 从经包含处理后的笔序列构建线段。
 // 每个线段至少由 3 笔构成，且内部笔相互重叠。
@@ -26,11 +27,11 @@ func BuildSegments(bis []MergedBi) []Segment {
 
 	for i < len(bis) {
 		// 尝试从位置 i 开始构建线段
-			seg, nextIdx := tryBuildSegment(bis, i)
-			if seg == nil {
-				i = nextIdx
-				continue
-			}
+		seg, nextIdx := tryBuildSegment(bis, i)
+		if seg == nil {
+			i = nextIdx
+			continue
+		}
 		segments = append(segments, *seg)
 		i = nextIdx
 	}
@@ -53,7 +54,7 @@ func tryBuildSegment(bis []MergedBi, start int) (*Segment, int) {
 	// 三笔必须有重叠区域
 	overlapHigh := min(min(b0.High, b1.High), b2.High)
 	overlapLow := max(max(b0.Low, b1.Low), b2.Low)
-	if overlapHigh <= overlapLow {
+	if overlapHigh < overlapLow {
 		// 没有重叠，不是线段
 		return nil, start + 1
 	}
@@ -67,9 +68,31 @@ func tryBuildSegment(bis []MergedBi, start int) (*Segment, int) {
 		Bottom:     min(min(b0.Low, b1.Low), b2.Low),
 	}
 
+	// 提取前三笔中的特征序列元素（与线段方向相反的笔）
+	// 必须在 extendSegment 之前预填充，否则初始特征元素不会被纳入分型检测
+	initFeatures := extractInitialFeatures([]MergedBi{b0, b1, b2}, seg.Direction)
+	seg.FeatureSeq = initFeatures
+
 	// 尝试延伸线段，获取延伸后的结果和下一位置
 	seg, nextPos := extendSegment(seg, bis, start+3, start)
 	return &seg, nextPos
+}
+
+// extractInitialFeatures 从初始笔列表中提取特征序列元素。
+func extractInitialFeatures(bis []MergedBi, segDir Direction) []FeatureElement {
+	features := make([]FeatureElement, 0, 2)
+	for _, b := range bis {
+		if b.Direction != segDir {
+			features = append(features, FeatureElement{
+				Bi:       b.Bi,
+				StartIdx: b.StartIndex,
+				EndIdx:   b.EndIndex,
+				High:     b.High,
+				Low:      b.Low,
+			})
+		}
+	}
+	return features
 }
 
 // extendSegment 尝试延伸线段，直到被破坏。
@@ -79,22 +102,41 @@ func tryBuildSegment(bis []MergedBi, start int) (*Segment, int) {
 //
 // 线段破坏分两种情况（文档 §4.5，严格遵循缠论原文）：
 //
-//   情况一（特征序列无缺口标准破坏）：
-//     特征序列经包含处理后出现反向分型，且该分型的
-//     第一元素与第二元素之间没有价格缺口（有重叠）。
-//     → 线段立即结束，结束点为该分型的极点位置。
+//	情况一（特征序列无缺口标准破坏）：
+//	  特征序列经包含处理后出现反向分型，且该分型的
+//	  第一元素与第二元素之间没有价格缺口（有重叠）。
+//	  → 线段立即结束，结束点为该分型的极点位置。
 //
-//   情况二（特征序列有缺口的破坏，需二次确认）：
-//     特征序列出现反向分型，但该分型的第一元素与第二元素
-//     之间存在价格缺口（无重叠）。需等待后续走势形成
-//     新的反向特征序列分型来确认。
-//     → 先标记 gapPending，继续延伸直到第二个确认分型出现。
+//	情况二（特征序列有缺口的破坏，需二次确认）：
+//	  特征序列出现反向分型，但该分型的第一元素与第二元素
+//	  之间存在价格缺口（无重叠）。需等待后续走势形成
+//	  新的反向特征序列分型来确认。
+//
+// 情况二实现说明：
+//
+//	理论要求（第67课）：从缺口分型的极点开始，形成一个新（试探性）线段，
+//	该新线段的特征序列出现分型（任一情况）后，原线段在第一次分型极点处结束。
+//
+//	当前实现步骤：
+//	  1. 特征序列出现分型且有缺口 → 记下 gapFractalIdx（分型中间元素索引）
+//	     重置 processedFeatures，进入二次确认模式
+//	  2. 二次确认模式中，收集与原线段同向的笔（构成新线段的特征序列）
+//	     新线段方向与原线段相反，故其特征序列 = 与原线段同向的笔序列
+//	  3. 对新特征序列执行包含处理，检测反向分型：
+//	     原线段向上 → 新线段向下 → 新特征序列(向上笔)出现底分型 → 确认
+//	     原线段向下 → 新线段向上 → 新特征序列(向下笔)出现顶分型 → 确认
+//	  4. 确认后，ConfirmIndex = gapFractalIdx（理论正确的结束位置）
 func extendSegment(seg Segment, bis []MergedBi, startPos, segStart int) (Segment, int) {
 	pos := startPos
-	gapPending := false // Case 2: 特征序列第一、二元素有缺口，等待二次确认
+	gapPending := false  // Case 2: 特征序列第一、二元素有缺口，等待二次确认
+	gapFractalIdx := 0   // 缺口分型中间元素在 K 线空间中的索引（用于 ConfirmIndex）
 
-	// 缓存经包含处理后的特征序列（避免每次全量重算）
+	// 缓存经包含处理后的特征序列（预填充初始特征元素，避免每次全量重算）
 	processedFeatures := make([]FeatureElement, 0, len(seg.FeatureSeq)+16)
+	// 对初始特征序列执行包含处理，确保分型检测的输入一致
+	for _, f := range seg.FeatureSeq {
+		processedFeatures = mergeFeatureToCache(processedFeatures, f)
+	}
 
 	for pos < len(bis) {
 		curr := bis[pos]
@@ -109,44 +151,95 @@ func extendSegment(seg Segment, bis []MergedBi, startPos, segStart int) (Segment
 			seg.Bottom = curr.Low
 		}
 
-		// 仅当新笔方向与线段方向相反时才影响特征序列
-		if curr.Direction != seg.Direction {
-			newFeat := FeatureElement{
-				Bi:       curr.Bi,
-				StartIdx: curr.StartIndex,
-				EndIdx:   curr.EndIndex,
-				High:     curr.High,
-				Low:      curr.Low,
-			}
+		if !gapPending {
+			// ── 正常模式：收集反向笔构成原线段的特征序列 ──
+			if curr.Direction != seg.Direction {
+				newFeat := FeatureElement{
+					Bi:       curr.Bi,
+					StartIdx: curr.StartIndex,
+					EndIdx:   curr.EndIndex,
+					High:     curr.High,
+					Low:      curr.Low,
+				}
 
-			// 增量更新特征序列缓存
-			seg.FeatureSeq = append(seg.FeatureSeq, newFeat)
-			processedFeatures = mergeFeatureToCache(processedFeatures, newFeat)
+				seg.FeatureSeq = append(seg.FeatureSeq, newFeat)
+				processedFeatures = mergeFeatureToCache(processedFeatures, newFeat)
 
-			// 检测特征序列分型（在已包含处理的序列上）
-			if len(processedFeatures) >= 3 {
-				last3 := processedFeatures[len(processedFeatures)-3:]
-				if checkFeatureFractal(last3, seg.Direction) {
-					// 检查该分型的第一、二元素之间是否存在缺口
-					hasGap := hasFeatureGap(last3[0], last3[1])
+				// 检测特征序列分型（在已包含处理的序列上）
+				if len(processedFeatures) >= 3 {
+					last3 := processedFeatures[len(processedFeatures)-3:]
+					if checkFeatureFractal(last3, seg.Direction) {
+						hasGap := hasFeatureGap(last3[0], last3[1])
 
-					if !hasGap {
-						// 情况一：无缺口 → 特征序列标准破坏，线段立即结束
-						if gapPending {
-							// 这是 Case 2 的二次确认
+						if !hasGap {
+							// 情况一：无缺口 → 标准破坏，线段立即结束
 							seg.IsBroken = true
-							seg.BreakType = BreakStroke
+							seg.BreakType = BreakStd
 							seg.ConfirmIndex = curr.EndIndex
 							return seg, pos + 1
 						}
+
+						// 情况二：有缺口 → 进入二次确认模式
+						gapPending = true
+						// 记录分型中间元素的结束索引作为缺口极点位置
+						gapFractalIdx = last3[1].EndIdx
+						// 重置特征序列缓存，开始收集新（试探性）线段的特征序列
+						// 新线段方向与原线段相反，其特征序列 = 与原线段同向的笔
+						//
+						// 重要：需回溯收集 gap 分型中间元素之后已经处理过的同向笔，
+						// 例如 gap 在 pos=5 处触发，但 pos=4 的笔是同向的，应纳入新特征序列。
+						newFeatures := make([]FeatureElement, 0)
+						for _, b := range seg.BiList {
+							if b.Direction == seg.Direction && b.StartIndex > last3[1].StartIdx {
+								newFeatures = append(newFeatures, FeatureElement{
+									Bi:       b.Bi,
+									StartIdx: b.StartIndex,
+									EndIdx:   b.EndIndex,
+									High:     b.High,
+									Low:      b.Low,
+								})
+							}
+						}
+						processedFeatures = make([]FeatureElement, 0, len(newFeatures)+8)
+						for _, f := range newFeatures {
+							processedFeatures = mergeFeatureToCache(processedFeatures, f)
+						}
+					}
+				}
+			}
+		} else {
+			// ── 二次确认模式：收集同向笔构成新线段的特征序列 ──
+			// 原线段向上 → 新(试探性)线段向下 → 新特征序列 = 向上笔(同向)
+			// 原线段向下 → 新(试探性)线段向上 → 新特征序列 = 向下笔(同向)
+			if curr.Direction == seg.Direction {
+				newFeat := FeatureElement{
+					Bi:       curr.Bi,
+					StartIdx: curr.StartIndex,
+					EndIdx:   curr.EndIndex,
+					High:     curr.High,
+					Low:      curr.Low,
+				}
+
+				processedFeatures = mergeFeatureToCache(processedFeatures, newFeat)
+
+				// 确定新线段方向对应的特征序列分型类型
+				// 新线段与原线段方向相反，故检查相反方向的分型
+				var oppositeDir Direction
+				if seg.Direction == DirUp {
+					oppositeDir = DirDown // 新线段向下 → 新特征序列(向上笔)出现底分型
+				} else {
+					oppositeDir = DirUp // 新线段向上 → 新特征序列(向下笔)出现顶分型
+				}
+
+				if len(processedFeatures) >= 3 {
+					last3 := processedFeatures[len(processedFeatures)-3:]
+					if checkFeatureFractal(last3, oppositeDir) {
+						// 新特征序列分型确认：原线段在第一次分型的极点处结束
 						seg.IsBroken = true
-						seg.BreakType = BreakStd
-						seg.ConfirmIndex = curr.EndIndex
+						seg.BreakType = BreakStroke
+						seg.ConfirmIndex = gapFractalIdx
 						return seg, pos + 1
 					}
-
-					// 情况二：有缺口 → 标记等待二次确认
-					gapPending = true
 				}
 			}
 		}
@@ -270,8 +363,20 @@ func determineFeatureDirection(features []FeatureElement) Direction {
 }
 
 // checkFeatureFractal 检查特征序列是否出现反向分型。
-// segDir 是线段的方向。当特征序列出现与线段方向相反的分型时，线段被破坏。
-// 例如：向上线段 → 特征序列出现底分型 → 线段被破坏
+//
+// 文档 §4.4 精确定义：
+//   - 向上线段的特征序列（向下笔序列）出现标准顶分型 → 线段被破坏
+//   - 向下线段的特征序列（向上笔序列）出现标准底分型 → 线段被破坏
+//
+// 特征序列顶分型公式：
+//
+//	high(E_i) > high(E_{i-1}) && high(E_i) > high(E_{i+1})
+//	&& low(E_i) > low(E_{i-1}) && low(E_i) > low(E_{i+1})
+//
+// 特征序列底分型公式：
+//
+//	low(E_i) < low(E_{i-1}) && low(E_i) < low(E_{i+1})
+//	&& high(E_i) < high(E_{i-1}) && high(E_i) < high(E_{i+1})
 func checkFeatureFractal(features []FeatureElement, segDir Direction) bool {
 	if len(features) < 3 {
 		return false
@@ -281,17 +386,17 @@ func checkFeatureFractal(features []FeatureElement, segDir Direction) bool {
 	last3 := features[len(features)-3:]
 
 	if segDir == DirUp {
-		// 向上线段：特征序列出现底分型 → 破坏
-		// 底分型：中间元素 Low 最低，High 也最低
-		if last3[1].Low < last3[0].Low && last3[1].Low < last3[2].Low &&
-			last3[1].High < last3[0].High && last3[1].High < last3[2].High {
-			return true
-		}
-	} else {
-		// 向下线段：特征序列出现顶分型 → 破坏
+		// 向上线段：特征序列（向下笔序列）出现顶分型 → 破坏
 		// 顶分型：中间元素 High 最高，Low 也最高
 		if last3[1].High > last3[0].High && last3[1].High > last3[2].High &&
 			last3[1].Low > last3[0].Low && last3[1].Low > last3[2].Low {
+			return true
+		}
+	} else {
+		// 向下线段：特征序列（向上笔序列）出现底分型 → 破坏
+		// 底分型：中间元素 Low 最低，High 也最低
+		if last3[1].Low < last3[0].Low && last3[1].Low < last3[2].Low &&
+			last3[1].High < last3[0].High && last3[1].High < last3[2].High {
 			return true
 		}
 	}
@@ -311,8 +416,10 @@ func hasFeatureGap(first, second FeatureElement) bool {
 // isStrokeBreakOnFeatures 检查是否发生笔破坏（文档 §4.5 情况二的先兆）。
 // 使用缓存的已处理特征序列（不包含当前新笔），确保比较的是「最后一个端点」。
 // 笔破坏：反向一笔直接穿透当前线段的最后一个端点。
-//   向上线段：向下笔跌破最后一个底 = 最近一个已处理特征元素的低点
-//   向下线段：向上笔升破最后一个顶 = 最近一个已处理特征元素的高点
+//
+//	向上线段：向下笔跌破最后一个底 = 最近一个已处理特征元素的低点
+//	向下线段：向上笔升破最后一个顶 = 最近一个已处理特征元素的高点
+//
 // 若尚未形成任何特征元素，则回退到线段整体的 Bottom/Top。
 func isStrokeBreakOnFeatures(bi MergedBi, segDir Direction, processedFeatures []FeatureElement) bool {
 	if len(processedFeatures) == 0 {
@@ -335,6 +442,7 @@ func isStrokeBreakOnFeatures(bi MergedBi, segDir Direction, processedFeatures []
 // 规则同 K 线包含处理：
 //   - 若与最后一个元素有包含关系，按方向合并
 //   - 若无包含关系，直接追加
+//
 // 避免每次全量重算整个特征序列。
 func mergeFeatureToCache(cache []FeatureElement, newFeat FeatureElement) []FeatureElement {
 	if len(cache) == 0 {

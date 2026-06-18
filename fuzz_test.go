@@ -16,17 +16,17 @@ func FuzzProcess(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, open, high, low, close, volume float64) {
 		// 构造 100 根随机 K 线
-		candles := make([]Candle, 100)
+		klines := make([]Kline, 100)
 		baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-		for i := range candles {
+		for i := range klines {
 			noise := float64(i) * 0.1
-			candles[i] = Candle{
-				Time:   baseTime.Add(time.Duration(i) * time.Hour),
-				Open:   open + noise,
-				High:   math.Max(open, high) + noise,
-				Low:    math.Min(low, math.Min(open, close)) + noise,
-				Close:  close + noise,
-				Volume: math.Max(0, volume),
+			klines[i] = Kline{
+				Time:       baseTime.Add(time.Duration(i) * time.Hour),
+				Open:       open + noise,
+				High:       math.Max(open, high) + noise,
+				Low:        math.Min(low, math.Min(open, close)) + noise,
+				Close:      close + noise,
+				BaseVolume: math.Max(0, volume),
 			}
 		}
 
@@ -36,7 +36,7 @@ func FuzzProcess(f *testing.F) {
 		}
 
 		// Process 不应 panic
-		result, err := engine.Process(candles)
+		result, err := engine.Process(klines)
 		if err != nil {
 			return
 		}
@@ -45,8 +45,8 @@ func FuzzProcess(f *testing.F) {
 		if result == nil {
 			t.Error("Process returned nil result with nil error")
 		}
-		if len(result.MergedCandles) > len(candles) {
-			t.Error("merged candles > input candles")
+		if len(result.MergedKlines) > len(klines) {
+			t.Error("merged klines > input klines")
 		}
 	})
 }
@@ -54,17 +54,17 @@ func FuzzProcess(f *testing.F) {
 // TestProcessDeterministic 属性测试：相同输入必须产生相同输出。
 func TestProcessDeterministic(t *testing.T) {
 	// 生成 200 根振荡 K 线
-	candles := generateFractalCandles(200)
+	klines := generateFractalKlines(200)
 
 	engine, _ := NewEngine(DefaultConfig())
 
 	// 运行两次
-	result1, err := engine.Process(candles)
+	result1, err := engine.Process(klines)
 	if err != nil {
 		t.Fatalf("first Process: %v", err)
 	}
 
-	result2, err := engine.Process(candles)
+	result2, err := engine.Process(klines)
 	if err != nil {
 		t.Fatalf("second Process: %v", err)
 	}
@@ -87,25 +87,25 @@ func TestProcessDeterministic(t *testing.T) {
 // TestIncrementalEquivalence 属性测试：增量更新必须与全量重算完全一致。
 func TestIncrementalEquivalence(t *testing.T) {
 	// 用 200 根振荡 K 线，分批增量更新，每步与全量比对
-	candles := generateFractalCandles(200)
+	klines := generateFractalKlines(200)
 
 	engine, _ := NewEngine(DefaultConfig())
 
 	// 先处理前 50 根作为起点
-	_, err := engine.Process(candles[:50])
+	_, err := engine.Process(klines[:50])
 	if err != nil {
 		t.Fatalf("initial Process: %v", err)
 	}
 
 	// 逐根增量更新，每步与全量重算对比
-	for i := 50; i < len(candles); i++ {
-		incResult, err := engine.Update(candles[i])
+	for i := 50; i < len(klines); i++ {
+		incResult, err := engine.Update(klines[i])
 		if err != nil {
 			t.Fatalf("Update at %d: %v", i, err)
 		}
 
 		// 全量重算相同数据
-		fullResult, err := engine.Process(candles[:i+1])
+		fullResult, err := engine.Process(klines[:i+1])
 		if err != nil {
 			t.Fatalf("full Process at %d: %v", i, err)
 		}
@@ -178,10 +178,10 @@ func resultsEqual(a, b *Result) bool {
 // TestRaceCondition 竞态测试：多个 goroutine 同时调用不应 panic。
 func TestRaceCondition(t *testing.T) {
 	engine, _ := NewEngine(DefaultConfig())
-	candles := generateFractalCandles(500)
+	klines := generateFractalKlines(500)
 
 	// 先初始化
-	_, err := engine.Process(candles)
+	_, err := engine.Process(klines)
 	if err != nil {
 		t.Fatalf("initial Process: %v", err)
 	}
@@ -191,13 +191,13 @@ func TestRaceCondition(t *testing.T) {
 	for g := 0; g < 10; g++ {
 		go func(id int) {
 			for i := 0; i < 20; i++ {
-				c := Candle{
-					Time:   time.Now(),
-					Open:   100 + float64(i),
-					High:   102 + float64(i),
-					Low:    98 + float64(i),
-					Close:  101 + float64(i),
-					Volume: 1000,
+				c := Kline{
+					Time:       time.Now(),
+					Open:       100 + float64(i),
+					High:       102 + float64(i),
+					Low:        98 + float64(i),
+					Close:      101 + float64(i),
+					BaseVolume: 1000,
 				}
 				_, err := engine.Update(c)
 				if err != nil {

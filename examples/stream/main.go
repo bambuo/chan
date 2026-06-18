@@ -24,25 +24,25 @@ func main() {
 	}
 
 	// 模拟数据源：200 根 K 线分批推送
-	totalCandles := 200
+	totalKlines := 200
 	batchSize := 50
-	allCandles := generateTrendData(totalCandles)
+	allKlines := generateTrendData(totalKlines)
 
-	fmt.Printf("开始流式处理 %d 根 K 线...\n\n", totalCandles)
+	fmt.Printf("开始流式处理 %d 根 K 线...\n\n", totalKlines)
 	var wg sync.WaitGroup
 
 	// 分批模拟推送
-	for batchStart := 0; batchStart < totalCandles; batchStart += batchSize {
+	for batchStart := 0; batchStart < totalKlines; batchStart += batchSize {
 		batchEnd := batchStart + batchSize
-		if batchEnd > totalCandles {
-			batchEnd = totalCandles
+		if batchEnd > totalKlines {
+			batchEnd = totalKlines
 		}
-		batch := allCandles[batchStart:batchEnd]
+		batch := allKlines[batchStart:batchEnd]
 
 		wg.Add(1)
-		go func(candles []chanlun.Candle) {
+		go func(klines []chanlun.Kline) {
 			defer wg.Done()
-			for _, c := range candles {
+			for _, c := range klines {
 				// 模拟每个新 K 线到达
 				result, err := engine.Update(c)
 				if err != nil {
@@ -87,10 +87,10 @@ func signalName(t chanlun.SignalType) string {
 }
 
 // generateTrendData 生成先涨后跌的走势数据。
-func generateTrendData(n int) []chanlun.Candle {
-	candles := make([]chanlun.Candle, n)
+func generateTrendData(n int) []chanlun.Kline {
+	klines := make([]chanlun.Kline, n)
 	t := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := range candles {
+	for i := range klines {
 		phase := float64(i) * 0.3
 		osc := 10.0 * math.Sin(phase)
 		var trend float64
@@ -100,14 +100,14 @@ func generateTrendData(n int) []chanlun.Candle {
 			trend = float64(n-i) * 0.3 // 后半段下跌
 		}
 		mid := 100.0 + trend + osc
-		candles[i] = chanlun.Candle{
-			Time:   t.Add(time.Duration(i) * time.Hour),
-			Open:   mid - 0.5,
-			High:   mid + 2.0,
-			Low:    mid - 1.5,
-			Close:  mid + 0.3,
-			Volume: 1000,
+		klines[i] = chanlun.Kline{
+			Time:       t.Add(time.Duration(i) * time.Hour),
+			Open:       mid - 0.5,
+			High:       mid + 2.0,
+			Low:        mid - 1.5,
+			Close:      mid + 0.3,
+			BaseVolume: 1000,
 		}
 	}
-	return candles
+	return klines
 }

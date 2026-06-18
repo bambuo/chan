@@ -22,18 +22,18 @@ func main() {
 	}
 
 	// 2. 准备 K 线数据（通常来自交易所 API）
-	candles := generateSampleData(200)
+	klines := generateSampleData(200)
 
 	// 3. 运行完整分析
-	result, err := engine.Process(candles)
+	result, err := engine.Process(klines)
 	if err != nil {
 		panic(err)
 	}
 
 	// 4. 读取中间结果
 	fmt.Printf("K线包含处理: %d → %d (%.1f%% 合并)\n",
-		len(candles), len(result.MergedCandles),
-		float64(len(candles)-len(result.MergedCandles))/float64(len(candles))*100)
+		len(klines), len(result.MergedKlines),
+		float64(len(klines)-len(result.MergedKlines))/float64(len(klines))*100)
 	fmt.Printf("分型: %d\n", len(result.Fractals))
 	fmt.Printf("笔: %d\n", len(result.Bis))
 	fmt.Printf("线段: %d\n", len(result.Segments))
@@ -81,22 +81,22 @@ func main() {
 }
 
 // generateSampleData 生成示例 K 线数据（正弦波振荡 + 趋势）。
-func generateSampleData(n int) []chanlun.Candle {
-	candles := make([]chanlun.Candle, n)
+func generateSampleData(n int) []chanlun.Kline {
+	klines := make([]chanlun.Kline, n)
 	t := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := range candles {
+	for i := range klines {
 		phase := float64(i) * 0.4
 		osc := 8.0 * math.Sin(phase)
 		trend := float64(i) * 0.15
 		mid := 100.0 + trend + osc
-		candles[i] = chanlun.Candle{
-			Time:   t.Add(time.Duration(i) * time.Hour),
-			Open:   mid - 0.5,
-			High:   mid + 2.0,
-			Low:    mid - 1.5,
-			Close:  mid + 0.3,
-			Volume: 1000,
+		klines[i] = chanlun.Kline{
+			Time:       t.Add(time.Duration(i) * time.Hour),
+			Open:       mid - 0.5,
+			High:       mid + 2.0,
+			Low:        mid - 1.5,
+			Close:      mid + 0.3,
+			BaseVolume: 1000,
 		}
 	}
-	return candles
+	return klines
 }

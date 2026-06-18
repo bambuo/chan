@@ -9,27 +9,27 @@ package chanlun
 //   |-------------|------|-------------------------------|
 //   | 级别大小     | 0.30 | 级别越大，信号越可靠            |
 //   | 背驰力度     | 0.25 | 力度差异越大，信号越可靠         |
-//   | 多周期共振   | 0.20 | 多个周期同时出信号加分           |
-//   | 成交量配合   | 0.15 | 放量配合信号加分                |
+//   | 多级别共振   | 0.20 | 多个级别同时出信号加分           |
+//   | 流动性配合   | 0.15 | 成交额/盘口/滑点支持信号时加分    |
 //   | 中枢位置     | 0.10 | 中枢边界附近的信号更可靠          |
 
 // ScoringContext 为信号评分提供上下文。
 type ScoringContext struct {
-	Signal           Signal      `json:"signal"`
-	Deviations      []Deviation  `json:"deviations,omitempty"`
-	Pivots          []Pivot      `json:"pivots,omitempty"`
-	VolumeData      []float64    `json:"volumeData,omitempty"`
-	MultiLevelCount int          `json:"multiLevelCount"`
-	ClosePrices     []float64    `json:"closePrices,omitempty"`
+	Signal          Signal      `json:"signal"`
+	Deviations      []Deviation `json:"deviations,omitempty"`
+	Pivots          []Pivot     `json:"pivots,omitempty"`
+	LiquidityData   []float64   `json:"liquidityData,omitempty"`
+	MultiLevelCount int         `json:"multiLevelCount"`
+	ClosePrices     []float64   `json:"closePrices,omitempty"`
 }
 
 // ScoreFactors 包含各项评分因子。
 type ScoreFactors struct {
-	LevelScore       float64 `json:"levelScore"`
-	DeviationScore   float64 `json:"deviationScore"`
-	ResonanceScore   float64 `json:"resonanceScore"`
-	VolumeScore      float64 `json:"volumeScore"`
-	PositionScore    float64 `json:"positionScore"`
+	LevelScore     float64 `json:"levelScore"`
+	DeviationScore float64 `json:"deviationScore"`
+	ResonanceScore float64 `json:"resonanceScore"`
+	LiquidityScore float64 `json:"liquidityScore"`
+	PositionScore  float64 `json:"positionScore"`
 }
 
 // ScoreSignal 对单个信号进行综合评分。
@@ -49,8 +49,8 @@ func ScoreSignal(ctx *ScoringContext) (float64, ScoreFactors) {
 	// 3. 多周期共振因子 (权重 0.20)
 	factors.ResonanceScore = scoreResonance(ctx.MultiLevelCount)
 
-	// 4. 成交量因子 (权重 0.15)
-	factors.VolumeScore = scoreVolume(ctx.Signal, ctx.VolumeData)
+	// 4. 流动性因子 (权重 0.15)
+	factors.LiquidityScore = scoreLiquidity(ctx.Signal, ctx.LiquidityData)
 
 	// 5. 中枢位置因子 (权重 0.10)
 	factors.PositionScore = scorePosition(ctx.Signal, ctx.Pivots)
@@ -59,7 +59,7 @@ func ScoreSignal(ctx *ScoringContext) (float64, ScoreFactors) {
 	total := factors.LevelScore*0.30 +
 		factors.DeviationScore*0.25 +
 		factors.ResonanceScore*0.20 +
-		factors.VolumeScore*0.15 +
+		factors.LiquidityScore*0.15 +
 		factors.PositionScore*0.10
 
 	return total, factors
@@ -121,25 +121,26 @@ func scoreResonance(count int) float64 {
 	}
 }
 
-// scoreVolume 评估成交量配合程度。
-// 一买/二买/三买时应放量，一卖/二卖/三卖时也应放量。
-func scoreVolume(signal Signal, volume []float64) float64 {
-	if len(volume) == 0 || signal.Index < 0 || signal.Index >= len(volume) {
-		return 0.5 // 无成交量数据时返回中性
+// scoreLiquidity 评估流动性配合程度。
+func scoreLiquidity(signal Signal, liquidity []float64) float64 {
+	if len(liquidity) == 0 || signal.Index < 0 || signal.Index >= len(liquidity) {
+		return 0.5 // 无流动性数据时返回中性
 	}
 
 	idx := signal.Index
 	window := 5 // 取前后各 5 根 K 线的平均成交量
 
-	// 信号点的成交量
-	signalVol := volume[idx]
+	signalVol := liquidity[idx]
 
 	// 前 window 根的平均成交量
 	sumBefore := 0.0
 	count := 0
 	for i := maxInt(0, idx-window); i < idx; i++ {
-		sumBefore += volume[i]
+		sumBefore += liquidity[i]
 		count++
+	}
+	if count == 0 {
+		return 0.5
 	}
 	avgBefore := sumBefore / float64(count)
 

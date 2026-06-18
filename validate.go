@@ -14,7 +14,7 @@ import (
 var (
 	ErrNilInput       = errors.New("chanlun: input is nil")
 	ErrEmptyInput     = errors.New("chanlun: input is empty")
-	ErrTooFewCandles  = errors.New("chanlun: need at least 3 candles")
+	ErrTooFewKlines   = errors.New("chanlun: need at least 3 klines")
 	ErrInvalidConfig  = errors.New("chanlun: invalid config")
 	ErrDivisionByZero = errors.New("chanlun: division by zero")
 )
@@ -58,31 +58,40 @@ func ValidateConfig(cfg Config) error {
 	return nil
 }
 
-// ValidateCandles 校验 K 线输入是否合法。
-func ValidateCandles(candles []Candle) error {
-	if candles == nil {
+// ValidateKlines 校验 Kline 输入是否合法。
+func ValidateKlines(klines []Kline) error {
+	if klines == nil {
 		return ErrNilInput
 	}
-	if len(candles) == 0 {
+	if len(klines) == 0 {
 		return ErrEmptyInput
 	}
-	if len(candles) < 3 {
-		return ErrTooFewCandles
+	if len(klines) < 3 {
+		return ErrTooFewKlines
 	}
 
-	// 检查价格合法性
-	for i, c := range candles {
+	// 检查价格、流动性字段和时间顺序合法性
+	for i, c := range klines {
 		if math.IsNaN(c.Open) || math.IsNaN(c.High) || math.IsNaN(c.Low) || math.IsNaN(c.Close) {
-			return fmt.Errorf("candle[%d]: NaN price", i)
+			return fmt.Errorf("kline[%d]: NaN price", i)
 		}
 		if math.IsInf(c.Open, 0) || math.IsInf(c.High, 0) || math.IsInf(c.Low, 0) || math.IsInf(c.Close, 0) {
-			return fmt.Errorf("candle[%d]: Inf price", i)
+			return fmt.Errorf("kline[%d]: Inf price", i)
+		}
+		if math.IsNaN(c.BaseVolume) || math.IsNaN(c.QuoteVolume) || math.IsNaN(c.Turnover) {
+			return fmt.Errorf("kline[%d]: NaN volume/turnover", i)
+		}
+		if math.IsInf(c.BaseVolume, 0) || math.IsInf(c.QuoteVolume, 0) || math.IsInf(c.Turnover, 0) {
+			return fmt.Errorf("kline[%d]: Inf volume/turnover", i)
 		}
 		if c.High < c.Low {
-			return fmt.Errorf("candle[%d]: High (%.2f) < Low (%.2f)", i, c.High, c.Low)
+			return fmt.Errorf("kline[%d]: High (%.2f) < Low (%.2f)", i, c.High, c.Low)
 		}
-		if c.Volume < 0 {
-			return fmt.Errorf("candle[%d]: negative volume", i)
+		if c.BaseVolume < 0 || c.QuoteVolume < 0 || c.Turnover < 0 || c.TradeCount < 0 {
+			return fmt.Errorf("kline[%d]: negative volume/turnover/trade count", i)
+		}
+		if i > 0 && !klines[i-1].Time.IsZero() && !c.Time.IsZero() && !c.Time.After(klines[i-1].Time) {
+			return fmt.Errorf("kline[%d]: time must be strictly ascending", i)
 		}
 	}
 

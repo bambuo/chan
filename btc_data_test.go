@@ -4,29 +4,66 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"testing"
 	"time"
 )
 
-// candleJSON 匹配文档中的 JSON 格式
-type candleJSON struct {
-	OpenTime  int64   `json:"open_time"`
+// klineJSON 匹配测试数据中的 JSON 格式。
+type klineJSON struct {
+	OpenTime  int64   `json:"openTime"`
 	Open      float64 `json:"open"`
 	High      float64 `json:"high"`
 	Low       float64 `json:"low"`
 	Close     float64 `json:"close"`
 	Volume    float64 `json:"volume"`
-	CloseTime int64   `json:"close_time"`
+	CloseTime int64   `json:"closeTime"`
 }
 
 type btcData struct {
-	Symbol    string       `json:"symbol"`
-	Timeframe string       `json:"timeframe"`
-	Candles   []candleJSON `json:"candles"`
+	Klines []klineJSON `json:"klines"`
+}
+
+func (k *klineJSON) UnmarshalJSON(b []byte) error {
+	type camelKlineJSON klineJSON
+	var aux camelKlineJSON
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	*k = klineJSON(aux)
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if k.OpenTime == 0 {
+		_ = json.Unmarshal(raw["open_time"], &k.OpenTime)
+	}
+	if k.CloseTime == 0 {
+		_ = json.Unmarshal(raw["close_time"], &k.CloseTime)
+	}
+	return nil
+}
+
+func (d *btcData) UnmarshalJSON(b []byte) error {
+	type camelBTCData btcData
+	var aux camelBTCData
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	*d = btcData(aux)
+	if len(d.Klines) == 0 {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(b, &raw); err != nil {
+			return err
+		}
+		_ = json.Unmarshal(raw["candles"], &d.Klines)
+	}
+	return nil
 }
 
 // loadBTCData 从 JSON 文件加载 K 线数据。
-func loadBTCData(path string) ([]Candle, error) {
+func loadBTCData(path string) ([]Kline, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
@@ -37,52 +74,55 @@ func loadBTCData(path string) ([]Candle, error) {
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 
-	candles := make([]Candle, len(data.Candles))
-	for i, c := range data.Candles {
-		candles[i] = Candle{
-			Time:   time.UnixMilli(c.OpenTime),
-			Open:   c.Open,
-			High:   c.High,
-			Low:    c.Low,
-			Close:  c.Close,
-			Volume: c.Volume,
+	klines := make([]Kline, len(data.Klines))
+	for i, c := range data.Klines {
+		klines[i] = Kline{
+			Time:       time.UnixMilli(c.OpenTime),
+			Open:       c.Open,
+			High:       c.High,
+			Low:        c.Low,
+			Close:      c.Close,
+			BaseVolume: c.Volume,
 		}
 	}
+	sort.SliceStable(klines, func(i, j int) bool {
+		return klines[i].Time.Before(klines[j].Time)
+	})
 
-	return candles, nil
+	return klines, nil
 }
 
-// 实盘数据路径
-const btcDataPath = "../../docs/BTCUSDT_1h.json"
-const ethDataPath = "../../docs/ETHUSDT_1h.json"
-const solDataPath = "../../docs/SOLUSDT_1h.json"
-const bnbDataPath = "../../docs/BNBUSDT_1h.json"
+// 实盘数据路径（相对于 lib/chan/）
+const btcDataPath = "docs/BTCUSDT_1h.json"
+const ethDataPath = "docs/ETHUSDT_1h.json"
+const solDataPath = "docs/SOLUSDT_1h.json"
+const bnbDataPath = "docs/BNBUSDT_1h.json"
 
 func TestBTCRealData_FullPipeline(t *testing.T) {
-	candles, err := loadBTCData(btcDataPath)
+	klines, err := loadBTCData(btcDataPath)
 	if err != nil {
 		t.Fatalf("load BTC data: %v", err)
 	}
-	t.Logf("Loaded %d BTCUSDT 1h candles", len(candles))
-	t.Logf("Date range: %s ~ %s", candles[0].Time.Format("2006-01-02 15:04"), candles[len(candles)-1].Time.Format("2006-01-02 15:04"))
-	t.Logf("Price range: %.2f ~ %.2f", minPrice(candles), maxPrice(candles))
+	t.Logf("Loaded %d BTCUSDT 1h klines", len(klines))
+	t.Logf("Date range: %s ~ %s", klines[0].Time.Format("2006-01-02 15:04"), klines[len(klines)-1].Time.Format("2006-01-02 15:04"))
+	t.Logf("Price range: %.2f ~ %.2f", minPrice(klines), maxPrice(klines))
 
 	engine, _ := NewEngine(DefaultConfig())
 	start := time.Now()
-	result, err := engine.Process(candles)
+	result, err := engine.Process(klines)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Engine.Process failed: %v", err)
 	}
 
 	t.Logf("├─ Processing time: %v", elapsed)
-	t.Logf("├─ MergedCandles:  %d (%.1f%% merged)", 
-		len(result.MergedCandles), 
-		float64(len(candles)-len(result.MergedCandles))/float64(len(candles))*100)
+	t.Logf("├─ MergedKlines:  %d (%.1f%% merged)",
+		len(result.MergedKlines),
+		float64(len(klines)-len(result.MergedKlines))/float64(len(klines))*100)
 	t.Logf("├─ Fractals:       %d", len(result.Fractals))
 	t.Logf("├─ Bis:            %d", len(result.Bis))
-	t.Logf("├─ MergedBis:      %d (%.1f%% merged)", 
-		len(result.MergedBis), 
+	t.Logf("├─ MergedBis:      %d (%.1f%% merged)",
+		len(result.MergedBis),
 		float64(len(result.Bis)-len(result.MergedBis))/float64(len(result.Bis))*100)
 	t.Logf("├─ Segments:       %d", len(result.Segments))
 	t.Logf("├─ Pivots:         %d", len(result.Pivots))
@@ -100,7 +140,7 @@ func TestBTCRealData_FullPipeline(t *testing.T) {
 			} else if tr.Type == TrendDown {
 				trendName = "下跌趋势"
 			}
-			t.Logf("  Trend %d: %s | %d pivots | candles [%d, %d] | complete=%v",
+			t.Logf("  Trend %d: %s | %d pivots | klines [%d, %d] | complete=%v",
 				i, trendName, len(tr.Pivots), tr.StartIndex, tr.EndIndex, tr.IsComplete)
 			if tr.CompleteReason != "" {
 				t.Logf("    → 完成原因: %s", tr.CompleteReason)
@@ -154,14 +194,14 @@ func TestBTCRealData_FullPipeline(t *testing.T) {
 }
 
 func TestBTCRealData_DetailedSegments(t *testing.T) {
-	candles, err := loadBTCData(btcDataPath)
+	klines, err := loadBTCData(btcDataPath)
 	if err != nil {
 		t.Fatalf("load BTC data: %v", err)
 	}
 
 	// 只处理最近 1000 根 K 线进行详细分析
-	window := candles[len(candles)-1000:]
-	t.Logf("Analyzing last %d candles (%s ~ %s)",
+	window := klines[len(klines)-1000:]
+	t.Logf("Analyzing last %d klines (%s ~ %s)",
 		len(window), window[0].Time.Format("2006-01-02"), window[len(window)-1].Time.Format("2006-01-02"))
 
 	engine, _ := NewEngine(DefaultConfig())
@@ -191,15 +231,15 @@ func TestBTCRealData_DetailedSegments(t *testing.T) {
 }
 
 func TestETHRealData(t *testing.T) {
-	candles, err := loadBTCData(ethDataPath) // same JSON format
+	klines, err := loadBTCData(ethDataPath) // same JSON format
 	if err != nil {
 		t.Fatalf("load ETH data: %v", err)
 	}
-	t.Logf("Loaded %d ETHUSDT 1h candles", len(candles))
-	t.Logf("Price range: %.2f ~ %.2f", minPrice(candles), maxPrice(candles))
+	t.Logf("Loaded %d ETHUSDT 1h klines", len(klines))
+	t.Logf("Price range: %.2f ~ %.2f", minPrice(klines), maxPrice(klines))
 
 	engine, _ := NewEngine(DefaultConfig())
-	result, err := engine.Process(candles)
+	result, err := engine.Process(klines)
 	if err != nil {
 		t.Fatalf("Engine.Process failed: %v", err)
 	}
@@ -211,7 +251,7 @@ func TestETHRealData(t *testing.T) {
 
 func TestBTC_MultipleWindows(t *testing.T) {
 	// 不同数据量窗口的算法性能对比
-	candles, err := loadBTCData(btcDataPath)
+	klines, err := loadBTCData(btcDataPath)
 	if err != nil {
 		t.Fatalf("load BTC data: %v", err)
 	}
@@ -225,10 +265,10 @@ func TestBTC_MultipleWindows(t *testing.T) {
 	t.Logf("%s", "────────────┼────────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────")
 
 	for _, w := range windows {
-		if w > len(candles) {
-			w = len(candles)
+		if w > len(klines) {
+			w = len(klines)
 		}
-		window := candles[len(candles)-w:]
+		window := klines[len(klines)-w:]
 
 		start := time.Now()
 		result, err := engine.Process(window)
@@ -248,12 +288,12 @@ func TestBTC_MultipleWindows(t *testing.T) {
 
 func TestBTC_RecentSegmentDetail(t *testing.T) {
 	// 最近 200 根 K 线的逐线段细节
-	candles, err := loadBTCData(btcDataPath)
+	klines, err := loadBTCData(btcDataPath)
 	if err != nil {
 		t.Fatalf("load BTC data: %v", err)
 	}
 
-	window := candles[len(candles)-200:]
+	window := klines[len(klines)-200:]
 	engine, _ := NewEngine(DefaultConfig())
 	result, err := engine.Process(window)
 	if err != nil {
@@ -298,9 +338,9 @@ func TestBTC_RecentSegmentDetail(t *testing.T) {
 }
 
 // 辅助函数
-func minPrice(candles []Candle) float64 {
-	m := candles[0].Low
-	for _, c := range candles {
+func minPrice(klines []Kline) float64 {
+	m := klines[0].Low
+	for _, c := range klines {
 		if c.Low < m {
 			m = c.Low
 		}
@@ -308,9 +348,9 @@ func minPrice(candles []Candle) float64 {
 	return m
 }
 
-func maxPrice(candles []Candle) float64 {
-	m := candles[0].High
-	for _, c := range candles {
+func maxPrice(klines []Kline) float64 {
+	m := klines[0].High
+	for _, c := range klines {
 		if c.High > m {
 			m = c.High
 		}

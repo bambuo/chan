@@ -8,7 +8,7 @@ import "fmt"
 //
 // 缠论的精髓在于多级别递归分析。
 // 级别由走势的递归构筑定义，而非时间周期。
-// 但在工程实现中，使用时间周期作为级别的近似观察窗口。
+// 但在工程实现中，使用交易所 interval 作为级别的近似观察窗口。
 //
 // 级别递归链：
 //   Level 1 (1F):  K线 → 笔 → 线段 → 中枢 → 走势类型
@@ -16,97 +16,97 @@ import "fmt"
 //   Level 3 (30F): 30F笔 = 5F线段 → 30F线段 = 5F走势类型
 //   ...
 //
-// MultiLevelCoordinator 管理多个时间周期的同步分析，
+// MultiLevelCoordinator 管理多个交易所 interval 的同步分析，
 // 并执行跨级别的背驰验证（区间套）和信号共振检测。
 
-// TimeframeConfig 定义一个时间周期的处理配置。
-type TimeframeConfig struct {
-	Name    string `json:"name"`
-	Periods int    `json:"periods"`
-	Config  Config `json:"config"`
+// IntervalConfig 定义一个交易所 interval 的处理配置。
+type IntervalConfig struct {
+	Interval       string `json:"interval"`
+	RelativeFactor int    `json:"relativeFactor"`
+	Config         Config `json:"config"`
 }
 
-// LevelResult 存储单个时间周期的分析结果。
+// LevelResult 存储单个交易所 interval 的分析结果。
 type LevelResult struct {
-	Name    string   `json:"name"`
-	Candles []Candle `json:"candles,omitempty"`
-	Result  *Result  `json:"result,omitempty"`
+	Interval string  `json:"interval"`
+	Klines   []Kline `json:"klines,omitempty"`
+	Result   *Result `json:"result,omitempty"`
 }
 
 // MultiLevelResult 包含多级别联立的完整分析结果。
 type MultiLevelResult struct {
-	Levels     []LevelResult         `json:"levels"`
-	Resonance  int                   `json:"resonance"`
-	Deviations []Deviation           `json:"deviations,omitempty"`
-	Signals    []Signal              `json:"signals,omitempty"`
+	Levels     []LevelResult          `json:"levels"`
+	Resonance  int                    `json:"resonance"`
+	Deviations []Deviation            `json:"deviations,omitempty"`
+	Signals    []Signal               `json:"signals,omitempty"`
 	Nesting    *IntervalNestingResult `json:"nesting,omitempty"`
 }
 
 // MultiLevelCoordinator 是多级别联立分析的协调器。
 type MultiLevelCoordinator struct {
-	timeframes []TimeframeConfig
+	intervals []IntervalConfig
 }
 
 // NewMultiLevelCoordinator 创建多级别联立协调器。
-// timeframes 按从高到低（大周期→小周期）排序。
-func NewMultiLevelCoordinator(timeframes []TimeframeConfig) *MultiLevelCoordinator {
-	return &MultiLevelCoordinator{timeframes: timeframes}
+// intervals 按从高到低（大 interval → 小 interval）排序。
+func NewMultiLevelCoordinator(intervals []IntervalConfig) *MultiLevelCoordinator {
+	return &MultiLevelCoordinator{intervals: intervals}
 }
 
-// DefaultTimeframes 返回默认的多级别配置（1h/30m/5m）。
-func DefaultTimeframes() []TimeframeConfig {
-	return []TimeframeConfig{
+// DefaultIntervals 返回默认的多级别 interval 配置（1h/30m/5m）。
+func DefaultIntervals() []IntervalConfig {
+	return []IntervalConfig{
 		{
-			Name:    "1h",
-			Periods: 12,
-			Config:  DefaultConfig(),
+			Interval:       "1h",
+			RelativeFactor: 12,
+			Config:         DefaultConfig(),
 		},
 		{
-			Name:    "30m",
-			Periods: 6,
-			Config:  DefaultConfig(),
+			Interval:       "30m",
+			RelativeFactor: 6,
+			Config:         DefaultConfig(),
 		},
 		{
-			Name:    "5m",
-			Periods: 1,
-			Config:  DefaultConfig(),
+			Interval:       "5m",
+			RelativeFactor: 1,
+			Config:         DefaultConfig(),
 		},
 	}
 }
 
-// Analyse 对多个时间周期的 K 线数据执行多级别联立分析。
-// data map 的 key 是级别名称（如 "1h", "30m", "5m"），
-// value 是对应时间周期的 K 线序列。
-func (mc *MultiLevelCoordinator) Analyse(data map[string][]Candle) (*MultiLevelResult, error) {
+// Analyse 对多个交易所 interval 的 Kline 数据执行多级别联立分析。
+// data map 的 key 是交易所 interval（如 "1h", "30m", "5m"），
+// value 是对应 interval 的 Kline 序列。
+func (mc *MultiLevelCoordinator) Analyse(data map[string][]Kline) (*MultiLevelResult, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("chanlun multi: no data provided")
 	}
 
 	result := &MultiLevelResult{
-		Levels: make([]LevelResult, 0, len(mc.timeframes)),
+		Levels: make([]LevelResult, 0, len(mc.intervals)),
 	}
 
 	// 第一步：逐级别独立运行完整分析
-	for _, tf := range mc.timeframes {
-		candles, ok := data[tf.Name]
-		if !ok || len(candles) == 0 {
+	for _, intervalCfg := range mc.intervals {
+		klines, ok := data[intervalCfg.Interval]
+		if !ok || len(klines) == 0 {
 			continue
 		}
 
-			engine, err := NewEngine(tf.Config)
-			if err != nil {
-				continue
-			}
-			r, err := engine.Process(candles)
+		engine, err := NewEngine(intervalCfg.Config)
+		if err != nil {
+			continue
+		}
+		r, err := engine.Process(klines)
 		if err != nil {
 			// 某个级别数据不足时跳过，不影响其他级别
 			continue
 		}
 
 		result.Levels = append(result.Levels, LevelResult{
-			Name:    tf.Name,
-			Candles: candles,
-			Result:  r,
+			Interval: intervalCfg.Interval,
+			Klines:   klines,
+			Result:   r,
 		})
 	}
 
@@ -188,28 +188,28 @@ func performMultiLevelNesting(levels []LevelResult) *IntervalNestingResult {
 		return nil
 	}
 
-		// 构建区间套数据提供者
-		provider := &MultiLevelDataProvider{
-			Levels: make([]string, 0, len(levels)),
-			Data:   make(map[string]LevelData),
+	// 构建区间套数据提供者
+	provider := &MultiLevelDataProvider{
+		Levels: make([]string, 0, len(levels)),
+		Data:   make(map[string]LevelData),
+	}
+
+	for _, l := range levels {
+		if l.Result == nil {
+			continue
 		}
+		provider.Levels = append(provider.Levels, l.Interval)
 
-		for _, l := range levels {
-			if l.Result == nil {
-				continue
-			}
-			provider.Levels = append(provider.Levels, l.Name)
-
-			// 尝试从k线计算MACD
-			if len(l.Candles) > 26 {
-				macd, signal, hist, err := CalculateMACD(
-					extractClosePrices(l.Candles),
-					12, 26, 9,
-				)
-				if err == nil {
-					provider.Data[l.Name] = LevelData{
-						Segments:   l.Result.Segments,
-						MACD:       macd,
+		// 尝试从k线计算MACD
+		if len(l.Klines) > 26 {
+			macd, signal, hist, err := CalculateMACD(
+				extractClosePrices(l.Klines),
+				12, 26, 9,
+			)
+			if err == nil {
+				provider.Data[l.Interval] = LevelData{
+					Segments:   l.Result.Segments,
+					MACD:       macd,
 					MACDSignal: signal,
 					MACDHist:   hist,
 				}
@@ -249,7 +249,7 @@ func mergeMultiLevelSignals(levels []LevelResult, crossDeviations []Deviation) [
 		// 如果背驰被跨级别确认，增强信号
 		for _, dev := range crossDeviations {
 			if sig.Deviation != nil && sig.Deviation.Direction == dev.Direction {
-				sig.Strength = maxFloat(sig.Strength+0.15, 1.0)
+				sig.Strength = minFloat(sig.Strength+0.15, 1.0)
 			}
 		}
 		signals = append(signals, sig)
@@ -273,9 +273,9 @@ func countResonance(signals []Signal) int {
 }
 
 // extractClosePrices 从 K 线提取收盘价（与 engine.go 中的 extractClose 类似）。
-func extractClosePrices(candles []Candle) []float64 {
-	prices := make([]float64, len(candles))
-	for i, c := range candles {
+func extractClosePrices(klines []Kline) []float64 {
+	prices := make([]float64, len(klines))
+	for i, c := range klines {
 		prices[i] = c.Close
 	}
 	return prices

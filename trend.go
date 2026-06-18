@@ -59,17 +59,15 @@ func classifyFrom(pivots []Pivot, i int) (*Trend, int) {
 	p0 := pivots[i]
 	p1 := pivots[i+1]
 
-		// 检查两个中枢的方向
-		if isUpTrend(p0, p1) {
-			// 上涨趋势：依次向上的中枢，ZD(N) ≥ ZG(N-1)
-			t := buildTrend(TrendUp, pivots, i)
-			return t, i + len(t.Pivots)
-		}
-		if isDownTrend(p0, p1) {
-			// 下跌趋势：依次向下的中枢，ZG(N) ≤ ZD(N-1)
-			t := buildTrend(TrendDown, pivots, i)
-			return t, i + len(t.Pivots)
-		}
+	// 检查两个中枢的方向
+	if isUpTrend(p0, p1) {
+		t := buildTrend(TrendUp, pivots, i)
+		return t, i + len(t.Pivots)
+	}
+	if isDownTrend(p0, p1) {
+		t := buildTrend(TrendDown, pivots, i)
+		return t, i + len(t.Pivots)
+	}
 
 	// 中枢之间无明确方向关系 → 独立盘整
 	return &Trend{
@@ -81,15 +79,15 @@ func classifyFrom(pivots []Pivot, i int) (*Trend, int) {
 }
 
 // isUpTrend 检查两个中枢是否构成上涨趋势。
-// 条件：p1 的 ZD ≥ p0 的 ZG（中枢之间不重叠，且 p1 在 p0 上方）
+// 条件：p1 的 DD > p0 的 GG（中枢波动区间不重叠，且 p1 在 p0 上方）
 func isUpTrend(p0, p1 Pivot) bool {
-	return p1.ZD >= p0.ZG
+	return p1.DD > p0.GG
 }
 
 // isDownTrend 检查两个中枢是否构成下跌趋势。
-// 条件：p1 的 ZG ≤ p0 的 ZD（中枢之间不重叠，且 p1 在 p0 下方）
+// 条件：p1 的 GG < p0 的 DD（中枢波动区间不重叠，且 p1 在 p0 下方）
 func isDownTrend(p0, p1 Pivot) bool {
-	return p1.ZG <= p0.ZD
+	return p1.GG < p0.DD
 }
 
 // buildTrend 从起始位置构建趋势（上涨或下跌）。
@@ -149,9 +147,10 @@ func IsTrendComplete(trend *Trend) bool {
 // MarkTrendComplete 基于背驰确认标记走势完成。
 //
 // 走势必完美定理：
-//   上涨趋势 → 顶背驰确认完成
-//   下跌趋势 → 底背驰确认完成
-//   盘整     → 第三类买卖点确认完成
+//
+//	上涨趋势 → 顶背驰确认完成
+//	下跌趋势 → 底背驰确认完成
+//	盘整     → 第三类买卖点确认完成
 //
 // 调用时机：在 DetectTrendDeviations 发现趋势背驰后调用。
 func MarkTrendComplete(trend *Trend, dev *Deviation) {

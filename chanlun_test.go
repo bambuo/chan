@@ -6,43 +6,43 @@ import (
 	"time"
 )
 
-func candle(h, l float64) Candle {
-	return Candle{High: h, Low: l, Time: time.Now()}
+func kline(h, l float64) Kline {
+	return Kline{High: h, Low: l, Time: time.Now()}
 }
 
-func candleOHLC(o, h, l, c float64) Candle {
-	return Candle{Open: o, High: h, Low: l, Close: c, Time: time.Now()}
+func klineOHLC(o, h, l, c float64) Kline {
+	return Kline{Open: o, High: h, Low: l, Close: c, Time: time.Now()}
 }
 
 // ──────────────────────────────────────────────
 // §1  K 线包含处理 测试
 // ──────────────────────────────────────────────
 
-func TestMergeCandles_NoContainment(t *testing.T) {
+func TestMergeKlines_NoContainment(t *testing.T) {
 	// 无包含关系
-	input := []Candle{
-		candle(10, 8),
-		candle(12, 10),
-		candle(14, 12),
+	input := []Kline{
+		kline(10, 8),
+		kline(12, 10),
+		kline(14, 12),
 	}
-	result := MergeCandles(input)
+	result := MergeKlines(input)
 	if len(result) != 3 {
-		t.Fatalf("expected 3 candles, got %d", len(result))
+		t.Fatalf("expected 3 klines, got %d", len(result))
 	}
 }
 
-func TestMergeCandles_UpContainment(t *testing.T) {
+func TestMergeKlines_UpContainment(t *testing.T) {
 	// 向上方向，K3 被 K2 包含：取高高、高低
 	// K1(10,8) → K2(12,10) 构成向上关系
 	// K3(11, 10.2): H=11≤12, L=10.2≥10 → 被 K2 包含
-	input := []Candle{
-		candle(10, 8),
-		candle(12, 10),
-		candle(11, 10.2),
+	input := []Kline{
+		kline(10, 8),
+		kline(12, 10),
+		kline(11, 10.2),
 	}
-	result := MergeCandles(input)
+	result := MergeKlines(input)
 	if len(result) != 2 {
-		t.Fatalf("expected 2 candles, got %d", len(result))
+		t.Fatalf("expected 2 klines, got %d", len(result))
 	}
 	// 向上合并：H=max(12,11)=12, L=max(10,10.2)=10.2
 	merged := result[1]
@@ -51,18 +51,18 @@ func TestMergeCandles_UpContainment(t *testing.T) {
 	}
 }
 
-func TestMergeCandles_DownContainment(t *testing.T) {
+func TestMergeKlines_DownContainment(t *testing.T) {
 	// 向下方向，K3 被 K2 包含：取低高、低低
 	// K1(12,10) → K2(10,8) 构成向下关系
 	// K3(9.5, 8.5): H=9.5≤10, L=8.5≥8 → 被 K2 包含
-	input := []Candle{
-		candle(12, 10),
-		candle(10, 8),
-		candle(9.5, 8.5),
+	input := []Kline{
+		kline(12, 10),
+		kline(10, 8),
+		kline(9.5, 8.5),
 	}
-	result := MergeCandles(input)
+	result := MergeKlines(input)
 	if len(result) != 2 {
-		t.Fatalf("expected 2 candles, got %d", len(result))
+		t.Fatalf("expected 2 klines, got %d", len(result))
 	}
 	// 向下合并：H=min(10,9.5)=9.5, L=min(8,8.5)=8
 	merged := result[1]
@@ -71,20 +71,20 @@ func TestMergeCandles_DownContainment(t *testing.T) {
 	}
 }
 
-func TestMergeCandles_MultiLevelContainment(t *testing.T) {
+func TestMergeKlines_MultiLevelContainment(t *testing.T) {
 	// 连续多层包含
 	// K1(10,8) → K2(12,10) 向上
 	// K3(11,10.2) 被 K2 包含 → 合并为 (12,10.2)
 	// K4(11.5,10.5) 被合并后的 (12,10.2) 包含 → 合并为 (12,10.5)
-	input := []Candle{
-		candle(10, 8),
-		candle(12, 10),
-		candle(11, 10.2),
-		candle(11.5, 10.5),
+	input := []Kline{
+		kline(10, 8),
+		kline(12, 10),
+		kline(11, 10.2),
+		kline(11.5, 10.5),
 	}
-	result := MergeCandles(input)
+	result := MergeKlines(input)
 	if len(result) != 2 {
-		t.Fatalf("expected 2 candles, got %d", len(result))
+		t.Fatalf("expected 2 klines, got %d", len(result))
 	}
 	merged := result[1]
 	if merged.High != 12 || merged.Low != 10.5 {
@@ -92,22 +92,22 @@ func TestMergeCandles_MultiLevelContainment(t *testing.T) {
 	}
 }
 
-func TestMergeCandles_NilEmpty(t *testing.T) {
-	result := MergeCandles(nil)
+func TestMergeKlines_NilEmpty(t *testing.T) {
+	result := MergeKlines(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
 	}
-	result = MergeCandles([]Candle{})
+	result = MergeKlines([]Kline{})
 	if len(result) != 0 {
 		t.Error("expected empty for empty input")
 	}
 }
 
-func TestMergeCandles_Single(t *testing.T) {
-	input := []Candle{candle(10, 8)}
-	result := MergeCandles(input)
+func TestMergeKlines_Single(t *testing.T) {
+	input := []Kline{kline(10, 8)}
+	result := MergeKlines(input)
 	if len(result) != 1 {
-		t.Fatalf("expected 1 candle, got %d", len(result))
+		t.Fatalf("expected 1 kline, got %d", len(result))
 	}
 }
 
@@ -116,19 +116,19 @@ func TestMergeCandles_Single(t *testing.T) {
 // ──────────────────────────────────────────────
 
 func TestFindFractals_TopBottom(t *testing.T) {
-		// 标准顶分型 + 底分型
-		// 顶分型@1: 中间K线(15,13), 左(10,8), 右(12,10)
-		// 底分型@5: 中间K线(7,5), 左(12,10), 右(14,11)
-		// 间隔=5-1-3=1 ≥ minGap(1) ✓
-		input := []Candle{
-			candle(10, 8),   // 0
-			candle(15, 13),  // 1 → 顶分型中间
-			candle(12, 10),  // 2
-			candle(12, 10),  // 3
-			candle(12, 10),  // 4 (filler)
-			candle(7, 5),    // 5 → 底分型中间
-			candle(14, 11),  // 6
-		}
+	// 标准顶分型 + 底分型
+	// 顶分型@1: 中间K线(15,13), 左(10,8), 右(12,10)
+	// 底分型@5: 中间K线(7,5), 左(12,10), 右(14,11)
+	// 间隔=5-1-3=1 ≥ minGap(1) ✓
+	input := []Kline{
+		kline(10, 8),  // 0
+		kline(15, 13), // 1 → 顶分型中间
+		kline(12, 10), // 2
+		kline(12, 10), // 3
+		kline(12, 10), // 4 (filler)
+		kline(7, 5),   // 5 → 底分型中间
+		kline(14, 11), // 6
+	}
 	result := FindFractals(input, 1)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 fractals, got %d", len(result))
@@ -145,52 +145,60 @@ func TestFindFractals_SameDirectionMerge(t *testing.T) {
 	// 同向多分型取极值 — 连续两个顶分型，取更高的
 	// 顶分型@1: H=15, 顶分型@4: H=18
 	// 同向合并取 H=18
-	input := []Candle{
-		candle(10, 8),   // 0
-		candle(15, 13),  // 1 → 顶(低)
-		candle(12, 10),  // 2
-		candle(13, 11),  // 3
-		candle(18, 15),  // 4 → 顶(高)
-		candle(14, 12),  // 5
+	input := []Kline{
+		kline(10, 8),  // 0
+		kline(15, 13), // 1 → 顶(低)
+		kline(12, 10), // 2
+		kline(13, 11), // 3
+		kline(18, 15), // 4 → 顶(高)
+		kline(14, 12), // 5
 	}
 	result := FindFractals(input, 1)
-	if len(result) != 1 {
-		t.Fatalf("expected 1 merged fractal, got %d", len(result))
+	if len(result) != 3 {
+		t.Fatalf("expected 3 objective fractals, got %d", len(result))
 	}
-	if result[0].High != 18 {
-		t.Errorf("expected merged top H=18, got H=%.1f", result[0].High)
+	filtered := FilterFractalsForBi(result, 1)
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 filtered fractal, got %d", len(filtered))
+	}
+	if filtered[0].High != 18 {
+		t.Errorf("expected filtered top H=18, got H=%.1f", filtered[0].High)
 	}
 }
 
 func TestFindFractals_InsuffientGap(t *testing.T) {
 	// 异向分型间隔不足 minGap 被过滤
 	// 顶@1, 底@3: 间隔=3-1-2=0 < minGap(2)
-	input := []Candle{
-		candle(10, 8),  // 0
-		candle(15, 13), // 1 → 顶
-		candle(12, 10), // 2
-		candle(9, 7),   // 3 → 底（间隔不足）
-		candle(11, 9),  // 4
+	input := []Kline{
+		kline(10, 8),  // 0
+		kline(15, 13), // 1 → 顶
+		kline(12, 10), // 2
+		kline(9, 7),   // 3 → 底（间隔不足）
+		kline(11, 9),  // 4
 	}
 	result := FindFractals(input, 2)
-	if len(result) != 1 {
-		t.Fatalf("expected 1 fractal (gap filtered), got %d", len(result))
+	if len(result) != 2 {
+		t.Fatalf("expected 2 objective fractals, got %d", len(result))
+	}
+	filtered := FilterFractalsForBi(result, 2)
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 filtered fractal, got %d", len(filtered))
 	}
 }
 
-func TestFindFractals_NotEnoughCandles(t *testing.T) {
-	result := FindFractals([]Candle{candle(10, 8), candle(12, 10)}, 1)
+func TestFindFractals_NotEnoughKlines(t *testing.T) {
+	result := FindFractals([]Kline{kline(10, 8), kline(12, 10)}, 1)
 	if result != nil {
-		t.Error("expected nil for < 3 candles")
+		t.Error("expected nil for < 3 klines")
 	}
 }
 
 func TestFindFractals_OnlyTop(t *testing.T) {
 	// 仅有一个顶分型
-	input := []Candle{
-		candle(10, 8),
-		candle(15, 13), // 顶
-		candle(12, 10),
+	input := []Kline{
+		kline(10, 8),
+		kline(15, 13), // 顶
+		kline(12, 10),
 	}
 	result := FindFractals(input, 1)
 	if len(result) != 1 || result[0].Type != TopFractal {
@@ -205,45 +213,45 @@ func TestFindFractals_OnlyTop(t *testing.T) {
 func TestBuildBis_DownStroke(t *testing.T) {
 	// 顶→底：向下笔
 	// 顶@1, 底@5: 独立K线=5-1-3=1 ≥ 1 ✓
-	candles := []Candle{
-		candle(10, 8),  // 0
-		candle(15, 13), // 1 → 顶
-		candle(12, 10), // 2
-		candle(11, 9),  // 3
-		candle(11, 9),  // 4 (filler)
-		candle(7, 5),   // 5 → 底
-		candle(13, 11), // 6
+	klines := []Kline{
+		kline(10, 8),  // 0
+		kline(15, 13), // 1 → 顶
+		kline(12, 10), // 2
+		kline(11, 9),  // 3
+		kline(11, 9),  // 4 (filler)
+		kline(7, 5),   // 5 → 底
+		kline(13, 11), // 6
 	}
-		fractals := []Fractal{
-			{Type: TopFractal, Index: 1, High: 15, Low: 13},
-			{Type: BottomFractal, Index: 5, Low: 5, High: 7},
-		}
-		bis := BuildBis(candles, fractals, 1, 0)
-		if len(bis) != 1 {
-			t.Fatalf("expected 1 bi, got %d", len(bis))
-		}
-		if bis[0].Direction != DirDown {
-			t.Error("expected downward bi (top→bottom)")
-		}
+	fractals := []Fractal{
+		{Type: TopFractal, Index: 1, High: 15, Low: 13},
+		{Type: BottomFractal, Index: 5, Low: 5, High: 7},
 	}
-	
-	func TestBuildBis_UpStroke(t *testing.T) {
-		// 底→顶：向上笔
-		// 底@1, 顶@5: 独立K线=5-1-3=1 ≥ 1 ✓
-		candles := []Candle{
-			candle(12, 10), // 0
-			candle(7, 5),   // 1 → 底
-			candle(10, 8),  // 2
-			candle(11, 9),  // 3
-			candle(11, 9),  // 4 (filler)
-			candle(15, 13), // 5 → 顶
-			candle(13, 11), // 6
-		}
-		fractals := []Fractal{
-			{Type: BottomFractal, Index: 1, Low: 5, High: 7},
-			{Type: TopFractal, Index: 5, High: 15, Low: 13},
-		}
-	bis := BuildBis(candles, fractals, 1, 0)
+	bis := BuildBis(klines, fractals, 1, 0)
+	if len(bis) != 1 {
+		t.Fatalf("expected 1 bi, got %d", len(bis))
+	}
+	if bis[0].Direction != DirDown {
+		t.Error("expected downward bi (top→bottom)")
+	}
+}
+
+func TestBuildBis_UpStroke(t *testing.T) {
+	// 底→顶：向上笔
+	// 底@1, 顶@5: 独立K线=5-1-3=1 ≥ 1 ✓
+	klines := []Kline{
+		kline(12, 10), // 0
+		kline(7, 5),   // 1 → 底
+		kline(10, 8),  // 2
+		kline(11, 9),  // 3
+		kline(11, 9),  // 4 (filler)
+		kline(15, 13), // 5 → 顶
+		kline(13, 11), // 6
+	}
+	fractals := []Fractal{
+		{Type: BottomFractal, Index: 1, Low: 5, High: 7},
+		{Type: TopFractal, Index: 5, High: 15, Low: 13},
+	}
+	bis := BuildBis(klines, fractals, 1, 0)
 	if len(bis) != 1 {
 		t.Fatalf("expected 1 bi, got %d", len(bis))
 	}
@@ -256,25 +264,25 @@ func TestBuildBis_Alternation(t *testing.T) {
 	// 向上+向下笔序列
 	// 底@1, 顶@5: 间隔=5-1-3=1 ✓ → 向上笔
 	// 顶@5, 底@9: 间隔=9-5-3=1 ✓ → 向下笔
-	candles := []Candle{
-		candle(12, 10), // 0
-		candle(7, 5),   // 1 → 底
-		candle(9, 7),   // 2
-		candle(11, 9),  // 3
-		candle(11, 9),  // 4 (filler)
-		candle(15, 13), // 5 → 顶
-		candle(13, 11), // 6
-		candle(12, 10), // 7
-		candle(12, 10), // 8 (filler)
-		candle(8, 6),   // 9 → 底
-		candle(14, 12), // 10
+	klines := []Kline{
+		kline(12, 10), // 0
+		kline(7, 5),   // 1 → 底
+		kline(9, 7),   // 2
+		kline(11, 9),  // 3
+		kline(11, 9),  // 4 (filler)
+		kline(15, 13), // 5 → 顶
+		kline(13, 11), // 6
+		kline(12, 10), // 7
+		kline(12, 10), // 8 (filler)
+		kline(8, 6),   // 9 → 底
+		kline(14, 12), // 10
 	}
 	fractals := []Fractal{
 		{Type: BottomFractal, Index: 1, Low: 5, High: 7},
 		{Type: TopFractal, Index: 5, High: 15, Low: 13},
 		{Type: BottomFractal, Index: 9, Low: 6, High: 8},
 	}
-	bis := BuildBis(candles, fractals, 1, 0)
+	bis := BuildBis(klines, fractals, 1, 0)
 	if len(bis) != 2 {
 		t.Fatalf("expected 2 bis (up+down), got %d", len(bis))
 	}
@@ -288,18 +296,18 @@ func TestBuildBis_Alternation(t *testing.T) {
 
 func TestBuildBis_FractalTypeMismatch_NoStroke(t *testing.T) {
 	// 同类型分型不构成笔
-	candles := []Candle{
-		candle(10, 8),
-		candle(15, 13), // 顶
-		candle(12, 10),
-		candle(16, 14), // 顶(更高)
-		candle(13, 11),
+	klines := []Kline{
+		kline(10, 8),
+		kline(15, 13), // 顶
+		kline(12, 10),
+		kline(16, 14), // 顶(更高)
+		kline(13, 11),
 	}
 	fractals := []Fractal{
 		{Type: TopFractal, Index: 1, High: 15},
 		{Type: TopFractal, Index: 3, High: 16},
 	}
-	bis := BuildBis(candles, fractals, 1, 0)
+	bis := BuildBis(klines, fractals, 1, 0)
 	if len(bis) != 0 {
 		t.Error("expected no bi for same type fractals")
 	}
@@ -308,17 +316,17 @@ func TestBuildBis_FractalTypeMismatch_NoStroke(t *testing.T) {
 func TestBuildBis_InsuffientGap(t *testing.T) {
 	// 不足最小 K 线数
 	// 底@1, 顶@3: 独立K线=3-1-2=0 < 2
-	candles := []Candle{
-		candle(10, 8),  // 0
-		candle(7, 5),   // 1 → 底
-		candle(12, 10), // 2
-		candle(15, 13), // 3 → 顶
+	klines := []Kline{
+		kline(10, 8),  // 0
+		kline(7, 5),   // 1 → 底
+		kline(12, 10), // 2
+		kline(15, 13), // 3 → 顶
 	}
 	fractals := []Fractal{
 		{Type: BottomFractal, Index: 1, Low: 5},
 		{Type: TopFractal, Index: 3, High: 15},
 	}
-	bis := BuildBis(candles, fractals, 2, 0)
+	bis := BuildBis(klines, fractals, 2, 0)
 	if len(bis) != 0 {
 		t.Error("expected no bi for insufficient gap")
 	}
@@ -493,10 +501,10 @@ func TestFindPivots_ThreeSegmentsOverlap(t *testing.T) {
 	if len(pivots) != 1 {
 		t.Fatalf("expected 1 pivot, got %d", len(pivots))
 	}
-	// ZG = min(15,13,16) = 13
-	// ZD = max(10,8,11) = 11
-	if pivots[0].ZG != 13 || pivots[0].ZD != 11 {
-		t.Errorf("expected ZG=13 ZD=11, got ZG=%.1f ZD=%.1f", pivots[0].ZG, pivots[0].ZD)
+	// ZG = min(Z段s0.Top, s2.Top) = min(15,16) = 15
+	// ZD = max(Z段s0.Bottom, s2.Bottom) = max(10,11) = 11
+	if pivots[0].ZG != 15 || pivots[0].ZD != 11 {
+		t.Errorf("expected ZG=15 ZD=11, got ZG=%.1f ZD=%.1f", pivots[0].ZG, pivots[0].ZD)
 	}
 	if pivots[0].State != PivotFormed {
 		t.Errorf("expected state PivotFormed, got %d", pivots[0].State)
@@ -536,8 +544,8 @@ func TestClassifyTrends_RangeOnly(t *testing.T) {
 func TestClassifyTrends_UpTrend(t *testing.T) {
 	// 两个依次向上的中枢 → 上涨趋势
 	pivots := []Pivot{
-		{ZG: 13, ZD: 11, StartIndex: 0, EndIndex: 30},
-		{ZG: 18, ZD: 15, StartIndex: 35, EndIndex: 60}, // ZD(15) > ZG(13) → 上涨
+		{ZG: 13, ZD: 11, GG: 14, DD: 10, StartIndex: 0, EndIndex: 30},
+		{ZG: 18, ZD: 15, GG: 19, DD: 15, StartIndex: 35, EndIndex: 60}, // DD(15) > GG(14) → 上涨
 	}
 	trends := ClassifyTrends(pivots)
 	if len(trends) != 1 {
@@ -554,8 +562,8 @@ func TestClassifyTrends_UpTrend(t *testing.T) {
 func TestClassifyTrends_DownTrend(t *testing.T) {
 	// 两个依次向下的中枢 → 下跌趋势
 	pivots := []Pivot{
-		{ZG: 15, ZD: 13, StartIndex: 0, EndIndex: 30},
-		{ZG: 12, ZD: 10, StartIndex: 35, EndIndex: 60}, // ZG(12) < ZD(13) → 下跌
+		{ZG: 15, ZD: 13, GG: 16, DD: 13, StartIndex: 0, EndIndex: 30},
+		{ZG: 12, ZD: 10, GG: 12, DD: 9, StartIndex: 35, EndIndex: 60}, // GG(12) < DD(13) → 下跌
 	}
 	trends := ClassifyTrends(pivots)
 	if len(trends) != 1 {
@@ -584,13 +592,13 @@ func TestDetectDeviations_UpDeviation(t *testing.T) {
 	signal := make([]float64, 21)
 	hist := make([]float64, 21)
 	for i := 0; i <= 10; i++ {
-		hist[i] = 2.0    // 前段MACD面积=22
-		macd[i] = 3.0    // 前段DIF极值=3.0
+		hist[i] = 2.0 // 前段MACD面积=22
+		macd[i] = 3.0 // 前段DIF极值=3.0
 		signal[i] = 1.0
 	}
 	for i := 11; i <= 20; i++ {
-		hist[i] = 0.5    // 后段MACD面积=5.5 < 22 ✓
-		macd[i] = 1.0    // 后段DIF极值=1.0 < 3.0 ✓
+		hist[i] = 0.5 // 后段MACD面积=5.5 < 22 ✓
+		macd[i] = 1.0 // 后段DIF极值=1.0 < 3.0 ✓
 		signal[i] = 0.5
 	}
 	// DIF穿越0轴：DIF*DEA = -0.01 <= 0 ✓
@@ -742,31 +750,31 @@ func TestScoreSignal_NoData(t *testing.T) {
 	}
 }
 
-// generateFractalCandles 生成能产生分型的振荡 K 线数据。
-func generateFractalCandles(count int) []Candle {
+// generateFractalKlines 生成能产生分型的振荡 K 线数据。
+func generateFractalKlines(count int) []Kline {
 	n := count
 	if n < 60 {
 		n = 60
 	}
-	candles := make([]Candle, n)
+	klines := make([]Kline, n)
 	t := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	for i := range candles {
+	for i := range klines {
 		phase := float64(i) * 0.4
 		base := 100.0 + float64(i)*0.15
 		osc := 8.0*math.Sin(phase) + 4.0*math.Sin(phase*2.7)
 		mid := base + osc
 
-		candles[i] = Candle{
-			Time:   t.Add(time.Duration(i) * time.Hour),
-			Open:   mid - 0.5,
-			High:   mid + 2.0,
-			Low:    mid - 1.5,
-			Close:  mid + 0.3,
-			Volume: 1000,
+		klines[i] = Kline{
+			Time:       t.Add(time.Duration(i) * time.Hour),
+			Open:       mid - 0.5,
+			High:       mid + 2.0,
+			Low:        mid - 1.5,
+			Close:      mid + 0.3,
+			BaseVolume: 1000,
 		}
 	}
-	return candles
+	return klines
 }
 
 // ──────────────────────────────────────────────
@@ -775,22 +783,22 @@ func generateFractalCandles(count int) []Candle {
 
 func TestEngine_Process_EndToEnd(t *testing.T) {
 	// 用 200 根振荡数据测试完整流水线
-		config := DefaultConfig()
-		engine, err := NewEngine(config)
-		if err != nil {
-			t.Fatalf("NewEngine failed: %v", err)
-		}
-	
-		candles := generateFractalCandles(200)
-	
-		result, err := engine.Process(candles)
+	config := DefaultConfig()
+	engine, err := NewEngine(config)
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+
+	klines := generateFractalKlines(200)
+
+	result, err := engine.Process(klines)
 	if err != nil {
 		t.Fatalf("Engine.Process failed: %v", err)
 	}
 
 	// 验证所有中间结果
-	if len(result.MergedCandles) == 0 {
-		t.Error("MergedCandles is empty")
+	if len(result.MergedKlines) == 0 {
+		t.Error("MergedKlines is empty")
 	}
 	if len(result.Fractals) < 2 {
 		t.Errorf("expected >=2 fractals, got %d", len(result.Fractals))
@@ -799,8 +807,8 @@ func TestEngine_Process_EndToEnd(t *testing.T) {
 		t.Errorf("expected >=3 bis, got %d", len(result.Bis))
 	}
 
-	t.Logf("MergedCandles: %d, Fractals: %d, Bis: %d, Segments: %d, Pivots: %d, Trends: %d, Signals: %d, Deviations: %d",
-		len(result.MergedCandles), len(result.Fractals), len(result.Bis),
+	t.Logf("MergedKlines: %d, Fractals: %d, Bis: %d, Segments: %d, Pivots: %d, Trends: %d, Signals: %d, Deviations: %d",
+		len(result.MergedKlines), len(result.Fractals), len(result.Bis),
 		len(result.Segments), len(result.Pivots), len(result.Trends),
 		len(result.Signals), len(result.Deviations))
 }
@@ -810,9 +818,9 @@ func TestEngine_ShortData_ReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	_, err = engine.Process([]Candle{candle(10, 8)})
+	_, err = engine.Process([]Kline{kline(10, 8)})
 	if err == nil {
-		t.Error("expected error for <3 candles")
+		t.Error("expected error for <3 klines")
 	}
 }
 
@@ -823,25 +831,25 @@ func TestEngine_Update_Incremental(t *testing.T) {
 	}
 
 	// 初始数据
-	candles := generateFractalCandles(200)
+	klines := generateFractalKlines(200)
 
-	result1, err := engine.Process(candles)
+	result1, err := engine.Process(klines)
 	if err != nil {
 		t.Fatalf("initial Process failed: %v", err)
 	}
 	_ = result1
 
 	// 增量更新一根 K 线
-	last := candles[len(candles)-1]
-	newCandle := Candle{
-		Time:   last.Time.Add(time.Hour),
-		Open:   last.Close - 1,
-		High:   last.Close + 3,
-		Low:    last.Close - 2,
-		Close:  last.Close + 1,
-		Volume: 1000,
+	last := klines[len(klines)-1]
+	newKline := Kline{
+		Time:       last.Time.Add(time.Hour),
+		Open:       last.Close - 1,
+		High:       last.Close + 3,
+		Low:        last.Close - 2,
+		Close:      last.Close + 1,
+		BaseVolume: 1000,
 	}
-	result2, err := engine.Update(newCandle)
+	result2, err := engine.Update(newKline)
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -858,19 +866,19 @@ func TestWithRealData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	candles := generateFractalCandles(100)
+	klines := generateFractalKlines(100)
 
-	result, err := engine.Process(candles)
+	result, err := engine.Process(klines)
 	if err != nil {
 		t.Fatalf("Process failed: %v", err)
 	}
 
 	// 基本验证
-	if len(result.MergedCandles) == 0 {
-		t.Error("no merged candles")
+	if len(result.MergedKlines) == 0 {
+		t.Error("no merged klines")
 	}
-	t.Logf("MergedCandles: %d, Fractals: %d, Bis: %d, Segments: %d, Pivots: %d, Trends: %d, Signals: %d",
-		len(result.MergedCandles), len(result.Fractals), len(result.Bis),
+	t.Logf("MergedKlines: %d, Fractals: %d, Bis: %d, Segments: %d, Pivots: %d, Trends: %d, Signals: %d",
+		len(result.MergedKlines), len(result.Fractals), len(result.Bis),
 		len(result.Segments), len(result.Pivots), len(result.Trends), len(result.Signals))
 }
 
@@ -895,9 +903,11 @@ func TestPivot_ZGZD_LockedDuringExtension(t *testing.T) {
 	}
 	p := pivots[0]
 
-	// ZG/ZD 应在形成时锁定（基于前3段），延伸不改变
-	expectedZG := min(min(15.0, 14.0), 16.0) // min(all 3 highs) = 14
-	expectedZD := max(max(10.0, 9.0), 11.0)   // max(all 3 lows) = 11
+	// ZG/ZD 应在形成时锁定（基于前两个 Z 段 s0+s2），延伸不改变
+	// Z 段: s0↓(Top=15,Bot=10), s2↓(Top=16,Bot=11)
+	// ZG = min(15, 16) = 15, ZD = max(10, 11) = 11
+	expectedZG := 15.0
+	expectedZD := 11.0
 	if p.ZG != expectedZG || p.ZD != expectedZD {
 		t.Errorf("ZG locked at %.1f (want %.1f), ZD locked at %.1f (want %.1f)",
 			p.ZG, expectedZG, p.ZD, expectedZD)
@@ -916,9 +926,9 @@ func TestPivot_ZGZD_LockedDuringExtension(t *testing.T) {
 
 // TestPivot_ThirdBuySell_TwoSegment 验证第三类买卖点的两段结构。
 func TestPivot_ThirdBuySell_TwoSegment(t *testing.T) {
-	// 中枢：三段重叠形成，ZG=12, ZD=9
+	// 中枢：Z段=s0↓(12,10), s2↓(14,9) → ZG=min(12,14)=12, ZD=max(10,9)=10
 	segments := []Segment{
-		{Direction: DirDown, StartIndex: 0, EndIndex: 10, Top: 13, Bottom: 10},
+		{Direction: DirDown, StartIndex: 0, EndIndex: 10, Top: 12, Bottom: 10},
 		{Direction: DirUp, StartIndex: 10, EndIndex: 20, Top: 12, Bottom: 8},
 		{Direction: DirDown, StartIndex: 20, EndIndex: 30, Top: 14, Bottom: 9},
 		// 离开段：向上突破 ZG=12
@@ -943,13 +953,14 @@ func TestPivot_ThirdBuySell_TwoSegment(t *testing.T) {
 
 // TestPivot_ThirdBuySell_NotTriggeredWhenPullbackEnters 验证回抽进入中枢时不触发三买。
 func TestPivot_ThirdBuySell_NotTriggeredWhenPullbackEnters(t *testing.T) {
+	// Z段=s0↓(15,10), s2↓(16,11) → ZG=min(15,16)=15, ZD=max(10,11)=11
 	segments := []Segment{
 		{Direction: DirDown, StartIndex: 0, EndIndex: 10, Top: 15, Bottom: 10},
 		{Direction: DirUp, StartIndex: 10, EndIndex: 20, Top: 14, Bottom: 9},
 		{Direction: DirDown, StartIndex: 20, EndIndex: 30, Top: 16, Bottom: 11},
-		// 离开段：向上突破 ZG=14
-		{Direction: DirUp, StartIndex: 30, EndIndex: 40, Top: 20, Bottom: 15},
-		// 回抽段：向下回试但低点=13，触及 ZG=14 → 不是三买
+		// 离开段：向上突破 ZG=15
+		{Direction: DirUp, StartIndex: 30, EndIndex: 40, Top: 20, Bottom: 16},
+		// 回抽段：向下回试但低点=13 < ZG=15 → 进入中枢，不是三买
 		{Direction: DirDown, StartIndex: 40, EndIndex: 50, Top: 17, Bottom: 13},
 	}
 	pivots := FindPivots(segments)
@@ -962,39 +973,66 @@ func TestPivot_ThirdBuySell_NotTriggeredWhenPullbackEnters(t *testing.T) {
 	}
 }
 
-// TestSegment_GapBased_Case1_Case2 验证线段破坏的缺口判定。
+// TestSegment_GapBased_Case1_Case2 验证线段破坏的缺口判定（文档 §4.6）。
+//
+// 向上线段的特征序列 = 向下笔序列，出现顶分型才破坏线段。
+// 向下线段的特征序列 = 向上笔序列，出现底分型才破坏线段。
 func TestSegment_GapBased_Case1_Case2(t *testing.T) {
-	// Case 1: 特征序列分型的第一、二元素无缺口 → 线段立即结束
+	// Case 1: 向上线段，特征序列（向下笔）出现顶分型，第一、二元素无缺口 → 线段立即结束 (BreakStd)
+	// 特征序列: s2↓(12,7), s4↓(14,9), s6↓(8,5)
+	//   s4 为顶分型: H=14 > max(12,8)=12 ✓  L=9 > max(7,5)=7 ✓
+	//   s2-s4 有重叠 (无缺口): s2.High(12) >= s4.Low(9) ✓
 	bisCase1 := []MergedBi{
 		makeBi(DirUp, 0, 3, 15, 10),   // s1↑
-		makeBi(DirDown, 3, 6, 13, 8),   // s2↓ (特征元素)
-		makeBi(DirUp, 6, 9, 16, 11),    // s3↑
-		makeBi(DirDown, 9, 12, 12, 9),  // s4↓ (与s2有重叠=无缺口)
-		makeBi(DirUp, 12, 15, 17, 10),  // s5↑
-		makeBi(DirDown, 15, 18, 10, 7), // s6↓ (形成底分型)
+		makeBi(DirDown, 3, 6, 12, 7),  // s2↓ (特征元素1)
+		makeBi(DirUp, 6, 9, 16, 11),   // s3↑
+		makeBi(DirDown, 9, 12, 14, 9), // s4↓ (特征元素2, 顶分型中间, 与s2有重叠=无缺口)
+		makeBi(DirUp, 12, 15, 17, 10), // s5↑
+		makeBi(DirDown, 15, 18, 8, 5), // s6↓ (特征元素3)
 	}
 	segments := BuildSegments(bisCase1)
 	if len(segments) == 0 {
 		t.Fatal("expected at least 1 segment")
 	}
-	// 第一段应被破坏（Case 1 无缺口）
 	if len(segments) >= 1 && !segments[0].IsBroken {
-		t.Log("segment not broken (may be valid in some cases)")
+		t.Error("Case 1: upward segment should be broken (top fractal in feature seq, no gap)")
+	}
+	if len(segments) >= 1 && segments[0].BreakType != BreakStd {
+		t.Errorf("Case 1: expected BreakStd (1), got %d", segments[0].BreakType)
 	}
 
-	// Case 2: 特征序列分型的第一、二元素有缺口 → 等高二次确认
-	bisCase2 := []MergedBi{
-		makeBi(DirUp, 0, 3, 20, 15),    // s1↑
-		makeBi(DirDown, 3, 6, 18, 14),  // s2↓ (特征元素)
-		makeBi(DirUp, 6, 9, 22, 16),    // s3↑
-		makeBi(DirDown, 9, 12, 14, 13), // s4↓ (与s2有缺口=无重叠)
-		makeBi(DirUp, 12, 15, 23, 15),  // s5↑
-		makeBi(DirDown, 15, 18, 13, 12),// s6↓ (形成底分型但在缺口后)
-		makeBi(DirUp, 18, 21, 24, 14),  // s7↑
-		makeBi(DirDown, 21, 24, 11, 10),// s8↓ (二次确认分型)
+		// Case 2: 向上线段，特征序列（向下笔）出现顶分型但第一、二元素有缺口 → 需二次确认 (BreakStroke)
+		//
+		// 理论流程（第67课）：
+		//   1. 第一特征序列（向下笔）: s2↓(14,10), s4↓(18,16), s6↓(11,7)
+		//      s4 为顶分型中间: H=18>max(14,11)✓, L=16>max(10,7)✓
+		//      s2-s4 有缺口: s2.High(14) < s4.Low(16) → gapPending
+		//   2. 从 s4 极点开始形成新（试探性）向下线段
+		//      新线段的特征序列 = 向上笔: s5↑(25,18), s7↑(20,12), s9↑(23,16)
+		//      s7 为底分型中间: L=12<min(18,16)✓, H=20<min(25,23)✓
+		//   3. 新特征序列出现底分型 → 确认原线段在 s4 极点处结束
+		bisCase2 := []MergedBi{
+			makeBi(DirUp, 0, 3, 20, 12),     // s1↑
+			makeBi(DirDown, 3, 6, 14, 10),   // s2↓ (特征元素1)
+			makeBi(DirUp, 6, 9, 22, 14),     // s3↑
+			makeBi(DirDown, 9, 12, 18, 16),  // s4↓ (特征元素2, 顶分型中间, 与s2有缺口)
+			makeBi(DirUp, 12, 15, 25, 18),   // s5↑ (新特征序列元素1)
+			makeBi(DirDown, 15, 18, 11, 7),  // s6↓ (特征元素3)
+			makeBi(DirUp, 18, 21, 20, 12),   // s7↑ (新特征序列元素2, 底分型中间)
+			makeBi(DirDown, 21, 24, 13, 9),  // s8↓
+			makeBi(DirUp, 24, 27, 23, 16),   // s9↑ (新特征序列元素3)
+			makeBi(DirDown, 27, 30, 10, 6),  // s10↓
+		}
+	segments2 := BuildSegments(bisCase2)
+	if len(segments2) == 0 {
+		t.Fatal("expected at least 1 segment for Case 2")
 	}
-	_ = BuildSegments(bisCase2)
-	// 验证至少能构建出线段（具体破坏判定取决于特征序列处理）
+	if len(segments2) >= 1 && !segments2[0].IsBroken {
+		t.Error("Case 2: upward segment should be broken (gap top fractal + second confirmation)")
+	}
+	if len(segments2) >= 1 && segments2[0].BreakType != BreakStroke {
+		t.Errorf("Case 2: expected BreakStroke (2), got %d", segments2[0].BreakType)
+	}
 }
 
 // TestPivot_GG_DD_Tracking 验证 GG/DD 随延伸正确更新。
@@ -1021,10 +1059,10 @@ func TestPivot_GG_DD_Tracking(t *testing.T) {
 	if p.DD != 8 {
 		t.Errorf("DD expected 8, got %.1f", p.DD)
 	}
-	// ZG/ZD should remain based on first 3 segments
-	// ZG = min(20,18,22) = 18, ZD = max(15,12,14) = 15
-	if p.ZG != 18 || p.ZD != 15 {
-		t.Errorf("ZG=%.1f (want 18), ZD=%.1f (want 15)", p.ZG, p.ZD)
+	// ZG/ZD should remain based on Z-segments (s0+s2)
+	// ZG = min(s0.Top, s2.Top) = min(20,22) = 20, ZD = max(s0.Bottom, s2.Bottom) = max(15,14) = 15
+	if p.ZG != 20 || p.ZD != 15 {
+		t.Errorf("ZG=%.1f (want 20), ZD=%.1f (want 15)", p.ZG, p.ZD)
 	}
 }
 

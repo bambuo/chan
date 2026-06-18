@@ -4,7 +4,8 @@ package chanlun
 // §5  中枢
 // ──────────────────────────────────────────────
 //
-// 中枢是三段连续线段的重叠区域，代表多空力量均衡区。
+// 中枢是至少三个连续次级别走势类型的重叠区域，代表多空力量均衡区。
+// 当前实现以已确认线段作为次级别走势类型的工程承载结构，并在 Pivot 中标记代理口径。
 //
 // 严格遵循缠论原文定义：
 //   ZG（中枢上沿）= min(前两个Z段的高点) —— 中枢形成后锁定不变
@@ -45,7 +46,7 @@ func FindPivots(segments []Segment) []Pivot {
 		overlapHigh := min(min(s0.Top, s1.Top), s2.Top)
 		overlapLow := max(max(s0.Bottom, s1.Bottom), s2.Bottom)
 
-		if overlapHigh > overlapLow {
+		if overlapHigh >= overlapLow {
 			// 确定中枢方向
 			// 上涨中枢：第一段向下（形成回调中枢，Z段=向下段）
 			// 下跌中枢：第一段向上（形成回升中枢，Z段=向上段）
@@ -68,6 +69,8 @@ func FindPivots(segments []Segment) []Pivot {
 				Segments:     []Segment{s0, s1, s2},
 				OverlapCount: 3,
 				Level:        1,
+				SourceLevel:  "segment",
+				IsProxy:      true,
 				State:        PivotFormed,
 				Direction:    pivotDir,
 			}
@@ -85,9 +88,18 @@ func FindPivots(segments []Segment) []Pivot {
 }
 
 // determinePivotDirection 根据前三段判定中枢方向。
-// 上涨中枢：第一段向下 → 中枢由回调形成（Z段=向下段，即与上涨趋势同向的段）
-// 下跌中枢：第一段向上 → 中枢由回升形成（Z段=向上段，即与下跌趋势同向的段）
-// 无法判定时，默认 DirUp（对应上涨趋势中的回调中枢，为最常见形态）
+//
+// 注意：返回值以 Z 段方向为准（而非价格趋势方向），具体对应关系：
+//
+//	DirDown = 上涨中枢（第一段向下，Z段=向下段，常见于上涨趋势中的回调中枢）
+//	DirUp   = 下跌中枢（第一段向上，Z段=向上段，常见于下跌趋势中的回升中枢）
+//
+// 使用示例：
+//
+//	上涨趋势中出现回调中枢 → pivot.Direction = DirDown（Z段方向=向下）
+//	下跌趋势中出现回升中枢 → pivot.Direction = DirUp（Z段方向=向上）
+//
+// 无法判定时，默认 DirUp（对应下跌趋势中的回升中枢，为保守默认值）。
 func determinePivotDirection(s0, s1, s2 Segment) Direction {
 	// 以第一段方向判定：s0向下→上涨中枢，s0向上→下跌中枢
 	if s0.Direction == DirDown {
@@ -104,15 +116,23 @@ func determinePivotDirection(s0, s1, s2 Segment) Direction {
 }
 
 // calcZGZD 根据中枢形成段计算中枢区间边界。
-// ZG = min(所有中枢形成段的高点) —— 中枢形成后锁定不变
-// ZD = max(所有中枢形成段的低点) —— 中枢形成后锁定不变
 //
-// 理论依据（缠论第65课）：
-// 中枢区间由最初形成中枢的三段次级别走势类型的重叠部分确定，
-// 即 [max(低点), min(高点)]。该区间在中枢形成后不再改变。
+// 文档 §5.1 精确定义：
+//
+//	ZG（中枢上沿）= min(g1, g2) —— 仅前两个 Z 走势段的高点
+//	ZD（中枢下沿）= max(d1, d2) —— 仅前两个 Z 走势段的低点
+//
+// Z 段判定（中线为与中枢方向同向的段）：
+//   - 上涨中枢（s0↓, s1↑, s2↓）：Z段 = s0, s2（第1、3段）
+//   - 下跌中枢（s0↑, s1↓, s2↑）：Z段 = s0, s2（第1、3段）
+//
+// 两种情况下 Z 段均为 s0 和 s2，s1 为反向段，不参与 ZG/ZD 计算。
+// ZG/ZD 在中枢形成后永不改变。
 func calcZGZD(s0, s1, s2 Segment, pivotDir Direction) (zg, zd float64) {
-	zg = min(min(s0.Top, s1.Top), s2.Top)
-	zd = max(max(s0.Bottom, s1.Bottom), s2.Bottom)
+	// ZG = min(第一个Z段高点, 第二个Z段高点)
+	zg = min(s0.Top, s2.Top)
+	// ZD = max(第一个Z段低点, 第二个Z段低点)
+	zd = max(s0.Bottom, s2.Bottom)
 	return
 }
 
@@ -124,7 +144,7 @@ func extendPivot(pivot Pivot, segments []Segment, pos int) (Pivot, int) {
 		s := segments[pos]
 
 		// 检查新线段是否与中枢区间 [ZD, ZG] 有重叠
-		if s.Top > pivot.ZD && s.Bottom < pivot.ZG {
+		if s.Top >= pivot.ZD && s.Bottom <= pivot.ZG {
 			// 在中枢区间内震荡：延伸
 			pivot.Segments = append(pivot.Segments, s)
 			pivot.OverlapCount++
@@ -147,13 +167,13 @@ func extendPivot(pivot Pivot, segments []Segment, pos int) (Pivot, int) {
 			}
 
 			pos++
-		} else if s.Top <= pivot.ZD || s.Bottom >= pivot.ZG {
+		} else if s.Top < pivot.ZD || s.Bottom > pivot.ZG {
 			// 线段完全脱离中枢区间 [ZD, ZG]
 			// 检查是否为第三类买卖点（需要两段确认：离开段 + 回抽段）
 			thirdBP := checkThirdBuySell(segments, pos, pivot)
 			if thirdBP != nil {
 				// 确认第三类买卖点：中枢被破坏
-				pivot.Segments = append(pivot.Segments, segments[pos])      // 离开段
+				pivot.Segments = append(pivot.Segments, segments[pos]) // 离开段
 				if pos+1 < len(segments) {
 					pivot.Segments = append(pivot.Segments, segments[pos+1]) // 回抽段
 				}
@@ -177,32 +197,33 @@ func extendPivot(pivot Pivot, segments []Segment, pos int) (Pivot, int) {
 
 // thirdBuySellInfo 第三类买卖点确认信息。
 type thirdBuySellInfo struct {
-	sigType       SignalType
-	confirmIndex  int
-	confirmPrice  float64
+	sigType      SignalType
+	confirmIndex int
+	confirmPrice float64
 }
 
 // checkThirdBuySell 检查是否形成第三类买卖点（两段结构）。
 //
 // 理论定义：
-//   三买 = 线段向上离开中枢 + 次级别回抽不触及 ZG
-//   三卖 = 线段向下离开中枢 + 次级别回抽不触及 ZD
+//
+//	三买 = 线段向上离开中枢 + 次级别回抽不触及 ZG
+//	三卖 = 线段向下离开中枢 + 次级别回抽不触及 ZD
 //
 // 检测流程：
-//   1. 当前段 s[pos] 是离开段（完全在 ZG 之上或 ZD 之下）
-//   2. 下一段 s[pos+1] 是回抽段（反向段，不触及中枢区间边界）
+//  1. 当前段 s[pos] 是离开段（完全在 ZG 之上或 ZD 之下）
+//  2. 下一段 s[pos+1] 是回抽段（反向段，不触及中枢区间边界）
 func checkThirdBuySell(segments []Segment, pos int, pivot Pivot) *thirdBuySellInfo {
 	if pos >= len(segments) || pos+1 >= len(segments) {
 		return nil
 	}
 
-	leaveSeg := segments[pos]   // 离开段
+	leaveSeg := segments[pos]      // 离开段
 	pullbackSeg := segments[pos+1] // 回抽段
 
 	// 三买：离开段向上突破 ZG，回抽段向下但不触及 ZG
 	if leaveSeg.Direction == DirUp && leaveSeg.Bottom > pivot.ZG {
 		// 回抽段必须是反向（向下），且其低点不触及 ZG
-		if pullbackSeg.Direction == DirDown && pullbackSeg.Bottom > pivot.ZG {
+		if pullbackSeg.Direction == DirDown && pullbackSeg.Bottom >= pivot.ZG {
 			return &thirdBuySellInfo{
 				sigType:      BuyPoint3,
 				confirmIndex: pullbackSeg.EndIndex,
@@ -214,7 +235,7 @@ func checkThirdBuySell(segments []Segment, pos int, pivot Pivot) *thirdBuySellIn
 	// 三卖：离开段向下突破 ZD，回抽段向上但不触及 ZD
 	if leaveSeg.Direction == DirDown && leaveSeg.Top < pivot.ZD {
 		// 回抽段必须是反向（向上），且其高点不触及 ZD
-		if pullbackSeg.Direction == DirUp && pullbackSeg.Top < pivot.ZD {
+		if pullbackSeg.Direction == DirUp && pullbackSeg.Top <= pivot.ZD {
 			return &thirdBuySellInfo{
 				sigType:      SellPoint3,
 				confirmIndex: pullbackSeg.EndIndex,
@@ -233,5 +254,5 @@ func checkThirdBuySell(segments []Segment, pos int, pivot Pivot) *thirdBuySellIn
 // 使用波动区间 [DD, GG] 而非中枢区间 [ZD, ZG]。
 func CheckPivotEnlargement(p1, p2 Pivot) bool {
 	// 两个中枢各自的波动全范围 [DD, GG]
-	return p1.GG > p2.DD && p2.GG > p1.DD
+	return p1.GG >= p2.DD && p2.GG >= p1.DD
 }

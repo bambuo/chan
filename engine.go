@@ -23,8 +23,8 @@ import (
 type Engine struct {
 	config Config
 	mu     sync.RWMutex
-	state  engineState  // O(1) 增量状态
-	cache  *Result      // 最近一次结果缓存
+	state  engineState // O(1) 增量状态
+	cache  *Result     // 最近一次结果缓存
 }
 
 // NewEngine 创建一个新的缠论引擎实例。
@@ -36,24 +36,25 @@ func NewEngine(config Config) (*Engine, error) {
 }
 
 // processInternal 执行完整 12 步算法流水线（无锁，供内部调用）。
-func (e *Engine) processInternal(candles []Candle) (*Result, error) {
-	if err := ValidateCandles(candles); err != nil {
+func (e *Engine) processInternal(klines []Kline) (*Result, error) {
+	if err := ValidateKlines(klines); err != nil {
 		return nil, err
 	}
 
 	// 步骤 1: K 线包含处理
-	merged := MergeCandles(candles)
+	merged := MergeKlines(klines)
 	if len(merged) < 3 {
-		return nil, fmt.Errorf("chanlun: too few candles after inclusion: %d", len(merged))
+		return nil, fmt.Errorf("chanlun: too few klines after inclusion: %d", len(merged))
 	}
 
-	// 步骤 2: 分型识别
+	// 步骤 2: 客观分型识别 + 成笔分型筛选
 	fractals := FindFractals(merged, 1)
+	biFractals := FilterFractalsForBi(fractals, e.config.BiMinKLineCount)
 
 	// 步骤 3: 笔的构建
 	var bis []Bi
-	if len(fractals) >= 2 {
-		bis = BuildBis(merged, fractals, e.config.BiMinKLineCount, e.config.NewBiMinPriceRatio)
+	if len(biFractals) >= 2 {
+		bis = BuildBis(merged, biFractals, e.config.BiMinKLineCount, e.config.NewBiMinPriceRatio)
 	}
 
 	// 步骤 4: 笔的包含处理
@@ -83,9 +84,9 @@ func (e *Engine) processInternal(candles []Candle) (*Result, error) {
 	// 步骤 10: 背驰检测
 	var deviations []Deviation
 	var trendDeviations []Deviation
-		if len(merged) > e.config.MACDSlowPeriod {
-			// MACD 在已合并 K 线上计算，保持索引空间与 segments/fractals/bis 一致
-			closePrices := extractClose(merged)
+	if len(merged) > e.config.MACDSlowPeriod {
+		// MACD 在已合并 K 线上计算，保持索引空间与 segments/fractals/bis 一致
+		closePrices := extractClose(merged)
 		macdResult, err := talib.MACD(closePrices, e.config.MACDFastPeriod,
 			e.config.MACDSlowPeriod, e.config.MACDSignalPeriod)
 		if err == nil && macdResult != nil {
@@ -94,56 +95,64 @@ func (e *Engine) processInternal(candles []Candle) (*Result, error) {
 				macdResult.MACD, macdResult.Signal, macdResult.Histogram)
 		}
 	}
-		allDeviations := append(deviations, trendDeviations...)
+	allDeviations := append(deviations, trendDeviations...)
 
-		// 用背驰检测结果更新走势完成状态（走势必完美定理）
-		UpdateTrendsWithDeviations(trends, trendDeviations)
+	// 用背驰检测结果更新走势完成状态（走势必完美定理）
+	UpdateTrendsWithDeviations(trends, trendDeviations)
 
 	// 步骤 11: 买卖点判定
 	signals := DetectSignals(trends, allDeviations, pivots, segments)
 
-		// 步骤 12: 信号强度评分
-		volumeData := extractVolume(merged)
-		closePrices := extractClose(merged)
-		for i := range signals {
-			score, _ := ScoreSignal(&ScoringContext{
-				Signal:          signals[i],
-				Deviations:      allDeviations,
-				Pivots:          pivots,
-				MultiLevelCount: 1,
-				VolumeData:      volumeData,
-				ClosePrices:     closePrices,
-			})
-			signals[i].Strength = score
-		}
+	// 步骤 12: 信号强度评分
+	liquidityData := extractLiquidity(merged)
+	closePrices := extractClose(merged)
+	for i := range signals {
+		score, _ := ScoreSignal(&ScoringContext{
+			Signal:          signals[i],
+			Deviations:      allDeviations,
+			Pivots:          pivots,
+			MultiLevelCount: 1,
+			LiquidityData:   liquidityData,
+			ClosePrices:     closePrices,
+		})
+		signals[i].Strength = score
+	}
 
 	return &Result{
-		MergedCandles: merged,
-		Fractals:      fractals,
-		Bis:           bis,
-		MergedBis:     mergedBis,
-		Segments:      segments,
-		Pivots:        pivots,
-		Trends:        trends,
-		Deviations:    allDeviations,
-		Signals:       signals,
+		MergedKlines: merged,
+		Fractals:     fractals,
+		BiFractals:   biFractals,
+		Bis:          bis,
+		MergedBis:    mergedBis,
+		Segments:     segments,
+		Pivots:       pivots,
+		Trends:       trends,
+		Deviations:   allDeviations,
+		Signals:      signals,
 	}, nil
 }
 
 // extractClose 从 K 线序列中提取收盘价序列。
-func extractClose(candles []Candle) []float64 {
-	prices := make([]float64, len(candles))
-	for i, c := range candles {
+func extractClose(klines []Kline) []float64 {
+	prices := make([]float64, len(klines))
+	for i, c := range klines {
 		prices[i] = c.Close
 	}
 	return prices
 }
 
-// extractVolume 从 K 线序列中提取成交量序列。
-func extractVolume(candles []Candle) []float64 {
-	volumes := make([]float64, len(candles))
-	for i, c := range candles {
-		volumes[i] = c.Volume
+// extractLiquidity 从 Kline 序列中提取更能代表流动性的成交额口径。
+func extractLiquidity(klines []Kline) []float64 {
+	volumes := make([]float64, len(klines))
+	for i, c := range klines {
+		switch {
+		case c.Turnover > 0:
+			volumes[i] = c.Turnover
+		case c.QuoteVolume > 0:
+			volumes[i] = c.QuoteVolume
+		default:
+			volumes[i] = c.BaseVolume
+		}
 	}
 	return volumes
 }

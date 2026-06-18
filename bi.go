@@ -17,9 +17,9 @@ package chanlun
 //   - 向下的笔序列中：取低高（min(H)）、低低（min(L)）
 
 // BuildBis 从分型列表构建笔序列。
-// 分型列表必须已经过同向取极值处理（由 FindFractals 保证）。
+// 分型列表必须已经过同向取极值和间隔过滤处理。
 // 返回的笔序列方向严格交替，且满足最少独立 K 线数要求。
-func BuildBis(candles []Candle, fractals []Fractal, minKLineCount int, minPriceRatio float64) []Bi {
+func BuildBis(klines []Kline, fractals []Fractal, minKLineCount int, minPriceRatio float64) []Bi {
 	if len(fractals) < 2 {
 		return nil
 	}
@@ -47,13 +47,13 @@ func BuildBis(candles []Candle, fractals []Fractal, minKLineCount int, minPriceR
 
 		// 检查独立 K 线数
 		// 文档 §3.2：分型之间至少间隔 1 根独立 K 线
-		independentKCount := end.Index - start.Index - 3
+		independentKCount := independentKCountBetweenFractals(start, end)
 		if independentKCount < minKLineCount {
 			continue
 		}
 
 		// 计算笔的统计信息
-		bi := buildBiFromRange(candles, start, end, dir)
+		bi := buildBiFromRange(klines, start, end, dir)
 
 		// 新笔标准（严笔）：检查价格变动幅度
 		if minKLineCount >= 5 && minPriceRatio > 0 {
@@ -73,7 +73,7 @@ func BuildBis(candles []Candle, fractals []Fractal, minKLineCount int, minPriceR
 }
 
 // buildBiFromRange 在分型范围内构建一笔。
-func buildBiFromRange(candles []Candle, start, end Fractal, dir Direction) Bi {
+func buildBiFromRange(klines []Kline, start, end Fractal, dir Direction) Bi {
 	// 确定笔的价格范围
 	startPrice := start.Low
 	if start.Type == TopFractal {
@@ -88,12 +88,12 @@ func buildBiFromRange(candles []Candle, start, end Fractal, dir Direction) Bi {
 	high := startPrice
 	low := startPrice
 	for i := start.Index; i <= end.Index; i++ {
-		if i >= 0 && i < len(candles) {
-			if candles[i].High > high {
-				high = candles[i].High
+		if i >= 0 && i < len(klines) {
+			if klines[i].High > high {
+				high = klines[i].High
 			}
-			if candles[i].Low < low {
-				low = candles[i].Low
+			if klines[i].Low < low {
+				low = klines[i].Low
 			}
 		}
 	}
@@ -124,19 +124,32 @@ func buildBiFromRange(candles []Candle, start, end Fractal, dir Direction) Bi {
 }
 
 // ──────────────────────────────────────────────
-// §3.5  笔的包含处理
+// §3.5  特征序列元素的包含处理（笔的包含处理）
 // ──────────────────────────────────────────────
-
-// MergeBis 对笔序列进行包含处理。
-// 连续同方向的笔之间可能存在包含关系，需要合并。
+//
+// 注意：此处的"笔的包含处理"作用对象是线段特征序列元素，而非常规笔序列。
+//
+// 缠论原文规定标准笔序列由顶底分型交替构成、方向严格交替出现，
+// 同向笔不应在常规笔序列中连续存在。
+//
+// 特征序列包含处理的正确位置在线段构建内部：
+//   - 向上线段取其向下笔序列作为特征序列
+//   - 向下线段取其向上笔序列作为特征序列
+//
+// 本函数是对特征序列元素在进入 BuildSegments 前的预处理（可选），
+// 与 segment.go 中的 mergeFeatureToCache 协作完成特征序列的包含处理。
+// 开启 EnableBiInclusion 时先在此合并特征序列元素中的包含关系，
+// 再由 mergeFeatureToCache 在延伸过程中进行增量包含处理。
 //
 // 笔包含的定义：
-//   笔 A 包含笔 B：笔 A 的高点 > 笔 B 的高点，且笔 A 的低点 < 笔 B 的低点
+//
+//	笔 A 包含笔 B：笔 A 的高点 > 笔 B 的高点，且笔 A 的低点 < 笔 B 的低点
 //
 // 处理规则（与 K 线包含处理逻辑一致）：
-//   方向由最近非包含笔对的关系确定
-//   - 向上序列中：取高高（max(H)）、高低（max(L)）
-//   - 向下序列中：取低高（min(H)）、低低（min(L)）
+//
+//	方向由最近非包含笔对的关系确定
+//	- 向上序列中：取高高（max(H)）、高低（max(L)）
+//	- 向下序列中：取低高（min(H)）、低低（min(L)）
 func MergeBis(bis []Bi) []MergedBi {
 	if len(bis) < 2 {
 		result := make([]MergedBi, len(bis))
@@ -167,7 +180,7 @@ func MergeBis(bis []Bi) []MergedBi {
 
 		// 同方向：检查包含关系
 		if isBiContained(curr, last.Bi) {
-			// 当前笔被最后一笔包含，需要合并
+			// 当前笔包含（或等于）最后一笔，需要合并
 			// 方向由最近非包含笔对关系确定（而非笔自身方向）
 			dir := determineBiDirection(result)
 			merged := mergeBiPair(last.Bi, curr, dir)
@@ -180,7 +193,7 @@ func MergeBis(bis []Bi) []MergedBi {
 
 		// 检查反向包含：最后一笔是否被当前笔包含
 		if isBiContained(last.Bi, curr) {
-			// 最后一笔被当前笔包含，替换它
+			// 最后一笔包含（或等于）当前笔，替换它
 			dir := determineBiDirection(result[:len(result)-1])
 			merged := mergeBiPair(curr, last.Bi, dir)
 			result[len(result)-1] = MergedBi{
@@ -205,9 +218,13 @@ func MergeBis(bis []Bi) []MergedBi {
 }
 
 // isBiContained 判断笔 a 是否包含笔 b。
-// 笔 A 包含笔 B: A.High > B.High 且 A.Low < B.Low
+//
+//	文档 §3.5: 特征元素 A 包含特征元素 B :=
+//	  high(A) >= high(B) && low(A) <= low(B)
+//
+// 参数 a 为外层笔，b 为被包含的笔。
 func isBiContained(a, b Bi) bool {
-	return a.High > b.High && a.Low < b.Low
+	return a.High >= b.High && a.Low <= b.Low
 }
 
 // mergeBiPair 合并两支同向笔。
@@ -257,8 +274,9 @@ func mergeBiPair(a, b Bi, dir Direction) Bi {
 // 返回 1=向上, -1=向下, 0=无法确定。
 //
 // 规则（与 K 线包含处理的 determineDirection 一致）：
-//   向上：当前笔 High > 前一笔 High 且 Low > 前一笔 Low
-//   向下：当前笔 High < 前一笔 High 且 Low < 前一笔 Low
+//
+//	向上：当前笔 High > 前一笔 High 且 Low > 前一笔 Low
+//	向下：当前笔 High < 前一笔 High 且 Low < 前一笔 Low
 func determineBiDirection(bis []MergedBi) Direction {
 	if len(bis) < 2 {
 		return DirNone

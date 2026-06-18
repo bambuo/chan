@@ -11,47 +11,49 @@ package chanlun
 // 正确性保证：processInternal 是全量算法，窗口内结果精确无误。
 // 复杂度保证：窗口大小 N 恒定，与总历史量无关。
 //
-// 窗口大小由 config.UpdateWindowSize 控制（默认 200），
+// 窗口大小由 config.UpdateWindowSize 控制（默认 300），
 // 这个值足够让尾部结果收敛（所有依赖链在窗口内完整）。
 
 // engineState 保存流水线全部中间状态。
 type engineState struct {
-	candles     []Candle
-	merged      []Candle
-	fractals    []Fractal
-	bis         []Bi
-	mergedBis   []MergedBi
-	segments    []Segment
-	pivots      []Pivot
-	trends      []Trend
-	deviations  []Deviation
-	signals     []Signal
-	macdMACD    []float64
-	macdSignal  []float64
-	macdHist    []float64
+	klines     []Kline
+	merged     []Kline
+	fractals   []Fractal
+	biFractals []Fractal
+	bis        []Bi
+	mergedBis  []MergedBi
+	segments   []Segment
+	pivots     []Pivot
+	trends     []Trend
+	deviations []Deviation
+	signals    []Signal
+	macdMACD   []float64
+	macdSignal []float64
+	macdHist   []float64
 }
 
 // Process 全量处理：同时填充增量状态。
-func (e *Engine) Process(candles []Candle) (*Result, error) {
-	if err := ValidateCandles(candles); err != nil {
+func (e *Engine) Process(klines []Kline) (*Result, error) {
+	if err := ValidateKlines(klines); err != nil {
 		return nil, err
 	}
 
-	result, err := e.processInternal(candles)
+	result, err := e.processInternal(klines)
 	if err != nil {
 		return nil, err
 	}
 
 	e.mu.Lock()
 	e.state = engineState{
-		candles:   copyCandles(candles),
-		merged:    copyCandles(result.MergedCandles),
-		fractals:  copyFractals(result.Fractals),
-		bis:       copyBis(result.Bis),
-		mergedBis: copyMergedBis(result.MergedBis),
-		segments:  copySegments(result.Segments),
-		pivots:    copyPivots(result.Pivots),
-		trends:    copyTrends(result.Trends),
+		klines:     copyKlines(klines),
+		merged:     copyKlines(result.MergedKlines),
+		fractals:   copyFractals(result.Fractals),
+		biFractals: copyFractals(result.BiFractals),
+		bis:        copyBis(result.Bis),
+		mergedBis:  copyMergedBis(result.MergedBis),
+		segments:   copySegments(result.Segments),
+		pivots:     copyPivots(result.Pivots),
+		trends:     copyTrends(result.Trends),
 		deviations: copyDeviations(result.Deviations),
 		signals:    copySignals(result.Signals),
 	}
@@ -64,27 +66,27 @@ func (e *Engine) Process(candles []Candle) (*Result, error) {
 // Update 真 O(1) 增量更新。
 //
 // 正确性保证：
-//   - MergeCandles 在全体 K 线上运行 → 包含处理 100% 精确
+//   - MergeKlines 在全体 K 线上运行 → 包含处理 100% 精确
 //   - 后续 pipeline（分型/笔/线段/中枢/背驰）在常量窗口上运行 → O(1)
 //   - 窗口选取尾部 N 根已合并 K 线 + 它们的原始 K 线索引 → 索引精确
 //
 // 性能：
 //   - 合并 O(n) but 极快（仅 high/low 比较）
-//   - 后续全部 O(windowSize) = O(200)
-func (e *Engine) Update(candle Candle) (*Result, error) {
+//   - 后续全部 O(windowSize) = O(300)
+func (e *Engine) Update(k Kline) (*Result, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	// ── 追加到全量历史 ──
-	e.state.candles = append(e.state.candles, candle)
+	e.state.klines = append(e.state.klines, k)
 
 	// ── 全体 K 线包含处理（精确）──
-	merged := MergeCandles(e.state.candles)
+	merged := MergeKlines(e.state.klines)
 
 	// ── 取尾部 N 根已合并 K 线 ──
 	windowSize := e.config.UpdateWindowSize
 	if windowSize <= 0 {
-		windowSize = 200
+		windowSize = 300
 	}
 
 	tailStart := len(merged) - windowSize
@@ -94,14 +96,14 @@ func (e *Engine) Update(candle Candle) (*Result, error) {
 	tail := merged[tailStart:]
 
 	// 找到 tail[0] 在原始 K 线中的索引（用于偏移）
-	rawStart := findRawIndex(e.state.candles, tail[0])
+	rawStart := findRawIndex(e.state.klines, tail[0])
 
 	// ── 用原始 K 线子集跑完整 pipeline ──
-	window := e.state.candles[rawStart:]
+	window := e.state.klines[rawStart:]
 	result, err := e.processInternal(window)
 	if err != nil {
 		// 窗口数据不足，全量重试
-		result, err = e.processInternal(e.state.candles)
+		result, err = e.processInternal(e.state.klines)
 		if err != nil {
 			return nil, err
 		}
@@ -115,6 +117,7 @@ func (e *Engine) Update(candle Candle) (*Result, error) {
 	// ── 替换尾部状态 ──
 	e.state.merged = merged
 	e.state.fractals = shiftAppendSlice(e.state.fractals, result.Fractals, rawStart)
+	e.state.biFractals = shiftAppendSlice(e.state.biFractals, result.BiFractals, rawStart)
 	e.state.bis = shiftAppendSlice(e.state.bis, result.Bis, rawStart)
 	e.state.mergedBis = shiftAppendSlice(e.state.mergedBis, result.MergedBis, rawStart)
 	e.state.segments = shiftAppendSlice(e.state.segments, result.Segments, rawStart)
@@ -127,8 +130,8 @@ func (e *Engine) Update(candle Candle) (*Result, error) {
 	return result, nil
 }
 
-// findRawIndex 在原始 K 线中找到与 merged candle 时间戳相同的索引。
-func findRawIndex(raw []Candle, target Candle) int {
+// findRawIndex 在原始 K 线中找到与已合并 K 线时间戳相同的索引。
+func findRawIndex(raw []Kline, target Kline) int {
 	for i := len(raw) - 1; i >= 0; i-- {
 		if raw[i].Time.Equal(target.Time) {
 			return i
@@ -151,10 +154,13 @@ func shiftResult(r *Result, offset int) *Result {
 		return r
 	}
 
-	// MergedCandles: 不需要偏移索引
+	// MergedKlines: 不需要偏移索引
 	// Fractals: Index
 	for i := range r.Fractals {
 		r.Fractals[i].Index += offset
+	}
+	for i := range r.BiFractals {
+		r.BiFractals[i].Index += offset
 	}
 	// Bis: StartIndex, EndIndex
 	for i := range r.Bis {
@@ -215,14 +221,14 @@ func trimResultToMergeCount(r *Result, mergeCount int) *Result {
 		return r
 	}
 
-	// MergedCandles 直接截断
-	if mergeCount < len(r.MergedCandles) {
-		r.MergedCandles = r.MergedCandles[:mergeCount]
+	// MergedKlines 直接截断
+	if mergeCount < len(r.MergedKlines) {
+		r.MergedKlines = r.MergedKlines[:mergeCount]
 	}
 
-		// 其他结构由调用方通过 shiftResult 偏移索引后自行裁剪
-		return r
-	}
+	// 其他结构由调用方通过 shiftResult 偏移索引后自行裁剪
+	return r
+}
 
 // shiftAppendSlice 用新切片替换旧切片的尾部（从 offset 位置开始）。
 func shiftAppendSlice[T any](old, new []T, offset int) []T {
@@ -269,8 +275,8 @@ func shiftAppendFractals(old, new []Fractal, offset int) []Fractal {
 // 辅助
 // ──────────────────────────────────────────────
 
-func copyCandles(src []Candle) []Candle {
-	dst := make([]Candle, len(src))
+func copyKlines(src []Kline) []Kline {
+	dst := make([]Kline, len(src))
 	copy(dst, src)
 	return dst
 }

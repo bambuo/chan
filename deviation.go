@@ -27,9 +27,10 @@ import (
 // macdHist: 柱状图值
 //
 // 检测线段背驰（盘整背驰 + 潜在趋势背驰）：
-//   相邻同向线段的力度对比，由 MACD 三要素确认。
-//   信号强度分级：走势背驰 > 线段背驰（盘整背驰）> 笔背驰
-//   最终的结构验证（a+A+b+B+c）在 DetectTrendDeviations 中完成。
+//
+//	相邻同向线段的力度对比，由 MACD 三要素确认。
+//	信号强度分级：走势背驰 > 线段背驰（盘整背驰）> 笔背驰
+//	最终的结构验证（a+A+b+B+c）在 DetectTrendDeviations 中完成。
 func DetectDeviations(segments []Segment, macdMACD, macdSignal, macdHist []float64) []Deviation {
 	if len(segments) < 2 {
 		return nil
@@ -37,34 +38,36 @@ func DetectDeviations(segments []Segment, macdMACD, macdSignal, macdHist []float
 
 	deviations := make([]Deviation, 0)
 
-		// 在相邻线段之间检测背驰
-		for i := 1; i < len(segments); i++ {
-			prev := segments[i-1]
-			curr := segments[i]
+	// 在相邻线段之间检测背驰
+	for i := 1; i < len(segments); i++ {
+		prev := segments[i-1]
+		curr := segments[i]
 
-			// 同向线段才进行背驰比较
-			if prev.Direction != curr.Direction {
-				continue
-			}
-
-			dev := compareSegments(prev, i-1, curr, i, macdMACD, macdSignal, macdHist)
-			if dev != nil {
-				dev.Type = "range" // 线段间背驰，默认为盘整背驰（具体类型由上层决定）
-				deviations = append(deviations, *dev)
-			}
+		// 同向线段才进行背驰比较
+		if prev.Direction != curr.Direction {
+			continue
 		}
+
+		dev := compareSegments(prev, i-1, curr, i, macdMACD, macdSignal, macdHist)
+		if dev != nil {
+			dev.Type = "range" // 线段间背驰，默认为盘整背驰（具体类型由上层决定）
+			deviations = append(deviations, *dev)
+		}
+	}
 
 	return deviations
 }
 
 // DetectTrendDeviations 基于 a+A+b+B+c 结构检测趋势背驰。
 // 文档 §7.3：趋势背驰需要完整的走势结构。
-//   结构：a(进入段) + A(中枢1) + b(中间段) + B(中枢2) + c(离开段)
-//   条件：
-//     1. A 和 B 为同级别同向中枢
-//     2. c 段离开 B 时包含第三类买卖点
-//     3. c 段的力度 < a 段的力度
-//     4. 价格创新高/低
+//
+//	结构：a(进入段) + A(中枢1) + b(中间段) + B(中枢2) + c(离开段)
+//	条件：
+//	  1. A 和 B 为同级别同向中枢
+//	  2. c 段离开 B 时包含第三类买卖点
+//	  3. c 段的力度 < a 段的力度
+//	  4. 价格创新高/低
+//
 // pivots 和 trends 用于验证结构完整性。
 func DetectTrendDeviations(segments []Segment, pivots []Pivot, trends []Trend, macdMACD, macdSignal, macdHist []float64) []Deviation {
 	if len(pivots) < 2 || len(trends) == 0 {
@@ -80,7 +83,7 @@ func DetectTrendDeviations(segments []Segment, pivots []Pivot, trends []Trend, m
 		}
 
 		// 取走势中的最后两个中枢作为 A 和 B
-		aPivot := trend.Pivots[0]                // A
+		aPivot := trend.Pivots[0]                   // A
 		bPivot := trend.Pivots[len(trend.Pivots)-1] // B
 
 		// 确保 B 被破坏（包含第三类买卖点）
@@ -93,25 +96,25 @@ func DetectTrendDeviations(segments []Segment, pivots []Pivot, trends []Trend, m
 		var cSeg *Segment
 
 		for i := range segments {
-				if segments[i].EndIndex <= aPivot.StartIndex &&
-					segments[i].Direction == trendTypeToDir(trend.Type) {
-					aSeg = &segments[i]
-				}
-				if segments[i].StartIndex >= bPivot.EndIndex &&
-					segments[i].Direction == trendTypeToDir(trend.Type) {
-					cSeg = &segments[i]
-					break
-				}
+			if segments[i].EndIndex <= aPivot.StartIndex &&
+				segments[i].Direction == trendTypeToDir(trend.Type) {
+				aSeg = &segments[i]
 			}
+			if segments[i].StartIndex >= bPivot.EndIndex &&
+				segments[i].Direction == trendTypeToDir(trend.Type) {
+				cSeg = &segments[i]
+				break
+			}
+		}
 
 		if aSeg == nil || cSeg == nil {
 			continue
 		}
 
-			// 比较 c 段和 a 段的力度
-			aIdx := findSegIndex(segments, aSeg)
-			cIdx := findSegIndex(segments, cSeg)
-			dev := compareSegments(*aSeg, aIdx, *cSeg, cIdx, macdMACD, macdSignal, macdHist)
+		// 比较 c 段和 a 段的力度
+		aIdx := findSegIndex(segments, aSeg)
+		cIdx := findSegIndex(segments, cSeg)
+		dev := compareSegments(*aSeg, aIdx, *cSeg, cIdx, macdMACD, macdSignal, macdHist)
 		if dev != nil {
 			dev.Level = TrendDeviation // 标记为走势级别背驰（最强）
 			dev.Type = "trend"
@@ -157,27 +160,27 @@ func compareSegments(prev Segment, prevIdx int, curr Segment, currIdx int, macdM
 		return nil
 	}
 
-		// 计算力度值（净价格变化幅度 / K线数量）
-		forceBefore := calcForce(prev)
-		forceAfter := calcForce(curr)
+	// 计算力度值（净价格变化幅度 / K线数量）
+	forceBefore := calcForce(prev)
+	forceAfter := calcForce(curr)
 
-			return &Deviation{
-				Type:           "",  // 由调用方设置（"trend" 或 "range"）
-				Level:          SegmentDeviation,
-				Direction:      devDir,
-				SegmentBefore:  &prev,
-				SegmentAfter:   &curr,
-				SegBeforeIdx:   prevIdx,
-				SegAfterIdx:    currIdx,
-				PriceHigh:      curr.Top,
-				ForceBefore:    forceBefore,
-				ForceAfter:     forceAfter,
-				MACDAreaBefore: areaBefore,
-				MACDAreaAfter:  areaAfter,
-				MACDDiffBefore: diffBefore,
-				MACDDiffAfter:  diffAfter,
-			}
+	return &Deviation{
+		Type:           "", // 由调用方设置（"trend" 或 "range"）
+		Level:          SegmentDeviation,
+		Direction:      devDir,
+		SegmentBefore:  &prev,
+		SegmentAfter:   &curr,
+		SegBeforeIdx:   prevIdx,
+		SegAfterIdx:    currIdx,
+		PriceHigh:      curr.Top,
+		ForceBefore:    forceBefore,
+		ForceAfter:     forceAfter,
+		MACDAreaBefore: areaBefore,
+		MACDAreaAfter:  areaAfter,
+		MACDDiffBefore: diffBefore,
+		MACDDiffAfter:  diffAfter,
 	}
+}
 
 // calcForce 计算线段的趋势力度。
 // 文档 §7.3: 趋势力度 = 价格变化幅度 / 时间（K 线数量）
@@ -229,9 +232,9 @@ func calcMACDDiff(seg Segment, macdMACD []float64) float64 {
 
 // checkMACDDeviation 检查 MACD 三要素是否同时满足背驰确认条件。
 // 文档 §7.4：三要素需同时满足：
-//   1. MACD 面积缩小（后段面积 < 前段面积）
-//   2. MACD 黄白线高度降低（后段 DIF 极值 < 前段 DIF 极值）
-//   3. DIF 有效回抽 0 轴
+//  1. MACD 面积缩小（后段面积 < 前段面积）
+//  2. MACD 黄白线高度降低（后段 DIF 极值 < 前段 DIF 极值）
+//  3. DIF 有效回抽 0 轴
 func checkMACDDeviation(areaBefore, areaAfter, diffBefore, diffAfter float64, prev, curr Segment, macdMACD, macdSignal []float64) bool {
 	// 1. MACD 面积缩小
 	areaShrunk := areaAfter < areaBefore
@@ -282,8 +285,8 @@ type LevelData struct {
 
 // MultiLevelDataProvider 为区间套提供多级别数据。
 type MultiLevelDataProvider struct {
-	Levels []string             `json:"levels"`             // 级别名称，如 ["1h", "30m", "5m"]
-	Data   map[string]LevelData `json:"data"`               // 每个级别的数据
+	Levels []string             `json:"levels"` // 级别名称，如 ["1h", "30m", "5m"]
+	Data   map[string]LevelData `json:"data"`   // 每个级别的数据
 }
 
 // PerformIntervalNesting 执行区间套定位。
@@ -374,13 +377,16 @@ func trendTypeToDir(t TrendType) Direction {
 	}
 }
 
-// findSegIndex 在 segments 切片中查找指定指针的索引。
+// findSegIndex 在 segments 切片中查找与指定线段匹配的索引。
+// 使用业务字段（起止索引 + 方向）而非指针比较，避免切片复制后指针失效。
 func findSegIndex(segments []Segment, seg *Segment) int {
 	if seg == nil || len(segments) == 0 {
 		return -1
 	}
 	for i := range segments {
-		if &segments[i] == seg {
+		if segments[i].StartIndex == seg.StartIndex &&
+			segments[i].EndIndex == seg.EndIndex &&
+			segments[i].Direction == seg.Direction {
 			return i
 		}
 	}
