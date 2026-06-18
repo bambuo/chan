@@ -24,22 +24,51 @@ func (s *StreamEngine) tryMergeKline(k Kline) bool {
 
 	last := s.mergedTail
 
-	if isContained(k, last.Kline) {
-		// 存在包含关系，合并
+	// 精细包含判定（使用配置的 InclusionOption）
+	opt := s.config.Inclusion
+	containDir := testContainment(last.Kline, k, opt.AllowTopEqual)
+
+	switch containDir {
+	case containCombine:
+		// 一字K线不合并
+		if k.High == k.Low && last.Kline.High == last.Kline.Low {
+			node := &mergedNode{Kline: k, pre: last}
+			last.next = node
+			s.mergedTail = node
+			s.mergedCount++
+			return false
+		}
+		if opt.ExcludeIncluded {
+			// exclude_included 模式：被包含的直接跳过
+			return true
+		}
 		dir := s.determineMergeDirection()
+		// 一字K线方向处理
+		if dir == DirUp && (k.High == k.Low || k.High == last.Kline.High) {
+			node := &mergedNode{Kline: k, pre: last}
+			last.next = node
+			s.mergedTail = node
+			s.mergedCount++
+			return false
+		}
+		if dir == DirDown && (k.High == k.Low || k.Low == last.Kline.Low) {
+			node := &mergedNode{Kline: k, pre: last}
+			last.next = node
+			s.mergedTail = node
+			s.mergedCount++
+			return false
+		}
 		merged := mergePair(last.Kline, k, dir)
 		last.Kline = merged
 		return true
+	case containUp, containDown:
+		node := &mergedNode{Kline: k, pre: last}
+		last.next = node
+		s.mergedTail = node
+		s.mergedCount++
+		return false
 	}
 
-	// 无包含关系，追加新节点
-	node := &mergedNode{
-		Kline: k,
-		pre:   last,
-	}
-	last.next = node
-	s.mergedTail = node
-	s.mergedCount++
 	return false
 }
 

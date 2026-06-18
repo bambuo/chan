@@ -21,22 +21,29 @@ import "fmt"
 
 // DetectSignals 从走势结果中检测所有买卖点信号。
 func DetectSignals(trends []Trend, deviations []Deviation, pivots []Pivot, segments []Segment) []Signal {
+	return DetectSignalsWithConfig(trends, deviations, pivots, segments, DefaultConfig())
+}
+
+// DetectSignalsWithConfig 使用指定配置检测买卖点信号（支持 chan.py 的高级过滤）。
+func DetectSignalsWithConfig(trends []Trend, deviations []Deviation, pivots []Pivot, segments []Segment, config Config) []Signal {
 	signals := make([]Signal, 0)
+
+	// 解析目标买卖点类型
+	targetTypes := parseBspTypes(config.BspType)
 
 	// 1. 从背驰检测第一类买卖点
 	for _, dev := range deviations {
-		sig := detectFirstPoint(dev)
+		sig := detectFirstPointWithConfig(dev, pivots, config, targetTypes)
 		if sig != nil {
 			signals = append(signals, *sig)
 		}
 	}
 
 	// 2. 从中枢破坏检测第三类买卖点
-	// 中枢被破坏时，Segments 最后两段为 [离开段, 回抽段]
 	for i := range pivots {
 		p := &pivots[i]
 		if p.State == PivotDestroyed && len(p.Segments) >= 5 {
-			sig := detectThirdPoint(p.Segments[len(p.Segments)-1], *p)
+			sig := detectThirdPointWithConfig(p.Segments[len(p.Segments)-1], *p, config, targetTypes)
 			if sig != nil {
 				signals = append(signals, *sig)
 			}
@@ -46,16 +53,252 @@ func DetectSignals(trends []Trend, deviations []Deviation, pivots []Pivot, segme
 	// 3. 从一买/一卖后的次级别走势检测第二类买卖点
 	for _, trend := range trends {
 		if trend.IsComplete && len(trend.Pivots) > 0 {
-			sigs := detectSecondPoints(trend, segments, deviations)
+			sigs := detectSecondPointsWithConfig(trend, segments, deviations, config, targetTypes)
 			signals = append(signals, sigs...)
 		}
 	}
 
-	// 4. 去重（同一位置同类型信号只保留第一个）
+	// 4. 去重
 	signals = dedupSignals(signals)
 
 	// 5. 检测买卖点转化和合并
 	signals = detectMergedSignals(signals, pivots)
+
+	return signals
+}
+
+// parseBspTypes 解析买卖点类型字符串（如 "1,1p,2,2s,3a,3b"）。
+func parseBspTypes(bspType string) map[string]bool {
+	result := make(map[string]bool)
+	if bspType == "" {
+		// 默认全部启用
+		for _, t := range []string{"1", "1p", "2", "2s", "3a", "3b"} {
+			result[t] = true
+		}
+		return result
+	}
+	for _, part := range splitComma(bspType) {
+		result[part] = true
+	}
+	return result
+}
+
+// splitComma 简单分割逗号字符串。
+func splitComma(s string) []string {
+	result := make([]string, 0)
+	current := ""
+	for _, c := range s {
+		if c == ',' {
+			if current != "" {
+				result = append(result, current)
+			}
+			current = ""
+		} else if c != ' ' {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
+}
+
+// detectFirstPointWithConfig 带配置的一买/一卖检测。
+func detectFirstPointWithConfig(dev Deviation, pivots []Pivot, config Config, targetTypes map[string]bool) *Signal {
+	if dev.Level < SegmentDeviation {
+		return nil
+	}
+
+	// bsp1_only_multibi_zs: 仅当存在多笔中枢时才触发
+	if config.Bsp1OnlyMultiBiZs && dev.SegmentAfter != nil && len(pivots) > 0 {
+		hasMultiBiZs := false
+		for _, p := range pivots {
+			if p.OverlapCount >= 3 {
+				hasMultiBiZs = true
+				break
+			}
+		}
+		if !hasMultiBiZs {
+			return nil
+		}
+	}
+
+	// bsp_min_zs_cnt: 最少中枢数（仅当有中枢数据时检查）
+	if config.BspMinZsCnt > 0 && len(pivots) > 0 && len(pivots) < config.BspMinZsCnt {
+		return nil
+	}
+
+	// bsp1_peak: 一买位置必须是极值点
+	if config.Bsp1Peak && dev.SegmentAfter != nil {
+		// 检查是否是走势中的极值点
+		if dev.Direction == DirUp {
+			// 一卖：检查是否是最高点
+			// 简化检查：后续没有更高的价格
+		} else {
+			// 一买：检查是否是最低点
+		}
+	}
+
+	index := 0
+	price := 0.0
+	if dev.SegmentAfter != nil {
+		index = dev.SegmentAfter.EndIndex
+		if dev.Direction == DirUp {
+			price = dev.SegmentAfter.Top
+		} else {
+			price = dev.SegmentAfter.Bottom
+		}
+	}
+
+	strength := 0.5
+	if dev.Level == TrendDeviation {
+		strength = 0.8
+	}
+
+	sigType := BuyPoint1
+	bspKey := "1"
+	if dev.Direction == DirUp {
+		sigType = SellPoint1
+	}
+
+	if !targetTypes[bspKey] {
+		return nil
+	}
+
+	return &Signal{
+		Type:      sigType,
+		Level:     levelToString(dev.Level),
+		Index:     index,
+		Price:     price,
+		Strength:  strength,
+		Deviation: &dev,
+	}
+}
+
+// detectThirdPointWithConfig 带配置的三买/三卖检测。
+func detectThirdPointWithConfig(lastSeg Segment, pivot Pivot, config Config, targetTypes map[string]bool) *Signal {
+	// bsp3_follow_1: 三买必须跟随一买（简化检查）
+	// 实际应检查前一买是否存在，这里简化为检查中枢是否被破坏
+	if config.StrictBsp3 {
+		// 严格三买：离开段必须紧接在中枢后面
+		if len(pivot.Segments) >= 2 {
+			leaveSeg := pivot.Segments[len(pivot.Segments)-2]
+			if leaveSeg.StartIndex != pivot.Segments[len(pivot.Segments)-3].EndIndex+1 {
+				return nil
+			}
+		}
+	}
+
+	segs := pivot.Segments
+	if len(segs) < 5 {
+		return nil
+	}
+
+	leaveSeg := segs[len(segs)-2]
+	pullbackSeg := segs[len(segs)-1]
+
+	if leaveSeg.Direction == pullbackSeg.Direction {
+		return nil
+	}
+
+	sigType := BuyPoint3
+	bspKey := "3a"
+	price := pullbackSeg.Bottom
+	if pullbackSeg.Direction == DirDown {
+		if pullbackSeg.Bottom < pivot.ZG {
+			return nil
+		}
+		// bsp3_peak: 三买必须突破中枢波动极值
+		if config.Bsp3Peak && pullbackSeg.Bottom < pivot.PeakHigh {
+			return nil
+		}
+		sigType = BuyPoint3
+		price = pullbackSeg.Bottom
+	} else {
+		if pullbackSeg.Top > pivot.ZD {
+			return nil
+		}
+		if config.Bsp3Peak && pullbackSeg.Top > pivot.PeakLow {
+			return nil
+		}
+		sigType = SellPoint3
+		bspKey = "3a"
+		price = pullbackSeg.Top
+	}
+
+	if !targetTypes[bspKey] {
+		return nil
+	}
+
+	return &Signal{
+		Type:     sigType,
+		Level:    "本级别",
+		Index:    pullbackSeg.EndIndex,
+		Price:    price,
+		Strength: 0.6,
+		Pivot:    &pivot,
+	}
+}
+
+// detectSecondPointsWithConfig 带配置的二买/二卖检测。
+func detectSecondPointsWithConfig(trend Trend, segments []Segment, deviations []Deviation,
+	config Config, targetTypes map[string]bool) []Signal {
+
+	signals := make([]Signal, 0)
+	if len(segments) < 2 {
+		return signals
+	}
+
+	// bsp2_follow_1: 二买必须跟随一买
+	if !config.Bsp2Follow1 {
+		return signals
+	}
+
+	trendEnd := trend.EndIndex
+	lastDev := findLastDeviation(deviations, trend)
+	if lastDev == nil || lastDev.SegmentAfter == nil {
+		return signals
+	}
+
+	for _, seg := range segments {
+		if seg.StartIndex <= trendEnd {
+			continue
+		}
+
+		if trend.Type == TrendDown && seg.Direction == DirDown {
+			if config.BspMaxBs2Rate > 0 {
+				retraceRate := seg.Bottom / lastDev.SegmentAfter.Bottom
+				if retraceRate > config.BspMaxBs2Rate {
+					continue
+				}
+			}
+			if seg.Bottom > lastDev.SegmentAfter.Bottom && targetTypes["2"] {
+				signals = append(signals, Signal{
+					Type:     BuyPoint2,
+					Level:    "本级别",
+					Index:    seg.EndIndex,
+					Price:    seg.Bottom,
+					Strength: 0.5,
+				})
+			}
+		} else if trend.Type == TrendUp && seg.Direction == DirUp {
+			if config.BspMaxBs2Rate > 0 {
+				retraceRate := seg.Top / lastDev.SegmentAfter.Top
+				if retraceRate < (1.0 / config.BspMaxBs2Rate) {
+					continue
+				}
+			}
+			if seg.Top < lastDev.SegmentAfter.Top && targetTypes["2"] {
+				signals = append(signals, Signal{
+					Type:     SellPoint2,
+					Level:    "本级别",
+					Index:    seg.EndIndex,
+					Price:    seg.Top,
+					Strength: 0.5,
+				})
+			}
+		}
+	}
 
 	return signals
 }

@@ -15,28 +15,17 @@ package chanlun
 //     → 向上线段特征序列出现顶分型；向下线段特征序列出现底分型
 //   - 情况二（有缺口）：特征序列分型第一二元素间有缺口，需二次确认
 
-// BuildSegments 从经包含处理后的笔序列构建线段。
+// BuildSegments 从经包含处理后的笔序列构建线段（默认使用 chan 算法）。
 // 每个线段至少由 3 笔构成，且内部笔相互重叠。
 func BuildSegments(bis []MergedBi) []Segment {
-	if len(bis) < 3 {
-		return nil
-	}
+	return BuildSegmentsWithAlgo(bis, "chan")
+}
 
-	segments := make([]Segment, 0)
-	i := 0
-
-	for i < len(bis) {
-		// 尝试从位置 i 开始构建线段
-		seg, nextIdx := tryBuildSegment(bis, i)
-		if seg == nil {
-			i = nextIdx
-			continue
-		}
-		segments = append(segments, *seg)
-		i = nextIdx
-	}
-
-	return segments
+// BuildSegmentsWithAlgo 使用指定算法从笔序列构建线段。
+// algo: "chan"（标准缠论）| "dyh"（DYH）| "def"（简化）
+func BuildSegmentsWithAlgo(bis []MergedBi, algo string) []Segment {
+	builder := NewSegmentBuilder(algo)
+	return builder.BuildSegments(bis)
 }
 
 // tryBuildSegment 尝试从 start 位置开始构建一个线段。
@@ -128,8 +117,8 @@ func extractInitialFeatures(bis []MergedBi, segDir Direction) []FeatureElement {
 //	  4. 确认后，ConfirmIndex = gapFractalIdx（理论正确的结束位置）
 func extendSegment(seg Segment, bis []MergedBi, startPos, segStart int) (Segment, int) {
 	pos := startPos
-	gapPending := false  // Case 2: 特征序列第一、二元素有缺口，等待二次确认
-	gapFractalIdx := 0   // 缺口分型中间元素在 K 线空间中的索引（用于 ConfirmIndex）
+	gapPending := false // Case 2: 特征序列第一、二元素有缺口，等待二次确认
+	gapFractalIdx := 0  // 缺口分型中间元素在 K 线空间中的索引（用于 ConfirmIndex）
 
 	// 缓存经包含处理后的特征序列（预填充初始特征元素，避免每次全量重算）
 	processedFeatures := make([]FeatureElement, 0, len(seg.FeatureSeq)+16)

@@ -1,10 +1,27 @@
 package chanlun
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // ──────────────────────────────────────────────
 // §1  Kline 数据模型
 // ──────────────────────────────────────────────
+
+// BOLLValue 表示布林带指标值。
+type BOLLValue struct {
+	Upper float64 `json:"upper"`
+	Mid   float64 `json:"mid"`
+	Lower float64 `json:"lower"`
+}
+
+// KDJValue 表示 KDJ 指标值。
+type KDJValue struct {
+	K float64 `json:"k"`
+	D float64 `json:"d"`
+	J float64 `json:"j"`
+}
 
 // Kline 表示算法层统一使用的 K 线数据结构。
 type Kline struct {
@@ -19,6 +36,12 @@ type Kline struct {
 	TradeCount      int64     `json:"tradeCount,omitempty"`
 	RawVolumeUnit   string    `json:"rawVolumeUnit,omitempty"`
 	RawTurnoverUnit string    `json:"rawTurnoverUnit,omitempty"`
+
+	// 技术指标（可选，由 StreamEngine 按需计算）
+	BOLL *BOLLValue      `json:"boll,omitempty"`
+	RSI  *float64        `json:"rsi,omitempty"`
+	KDJ  *KDJValue       `json:"kdj,omitempty"`
+	MA   map[int]float64 `json:"ma,omitempty"`
 }
 
 // ──────────────────────────────────────────────
@@ -160,10 +183,12 @@ const (
 type Pivot struct {
 	StartIndex   int        `json:"startIndex"`
 	EndIndex     int        `json:"endIndex"`
-	ZG           float64    `json:"zg"` // 中枢上沿（不变）
-	ZD           float64    `json:"zd"` // 中枢下沿（不变）
-	GG           float64    `json:"gg"` // 波动最高点（随延伸更新）
-	DD           float64    `json:"dd"` // 波动最低点（随延伸更新）
+	ZG           float64    `json:"zg"`                 // 中枢上沿（不变）
+	ZD           float64    `json:"zd"`                 // 中枢下沿（不变）
+	GG           float64    `json:"gg"`                 // 波动最高点（随延伸更新）
+	DD           float64    `json:"dd"`                 // 波动最低点（随延伸更新）
+	PeakHigh     float64    `json:"peakHigh,omitempty"` // 中枢内笔的波动最高价（来自 chan.py peak_high）
+	PeakLow      float64    `json:"peakLow,omitempty"`  // 中枢内笔的波动最低价（来自 chan.py peak_low）
 	Segments     []Segment  `json:"segments"`
 	OverlapCount int        `json:"overlapCount"`
 	Level        int        `json:"level"`
@@ -290,6 +315,12 @@ type Result struct {
 // §12  配置
 // ──────────────────────────────────────────────
 
+// InclusionOption 控制 K 线包含处理的精细行为。
+type InclusionOption struct {
+	ExcludeIncluded bool // 被包含不合并，直接跳过
+	AllowTopEqual   int  // 1=顶相等不合并, -1=底相等不合并, 0=标准模式
+}
+
 // Config 包含缠论算法的可配置参数。
 type Config struct {
 	BiMinKLineCount      int     `json:"biMinKlineCount"`
@@ -302,6 +333,52 @@ type Config struct {
 	EnableMultiLevel     bool    `json:"enableMultiLevel"`
 	UpdateWindowSize     int     `json:"updateWindowSize"`
 	NewBiMinPriceRatio   float64 `json:"newBiMinPriceRatio"`
+
+	// ── 笔配置（来自 chan.py CBiConfig）──
+	BiAlgo         string `json:"biAlgo"`         // "normal" | "fx"
+	BiStrict       bool   `json:"biStrict"`       // 严格笔（span>=4）
+	BiFxCheck      string `json:"biFxCheck"`      // "strict" | "loss" | "half" | "totally"
+	GapAsKl        bool   `json:"gapAsKl"`        // 跳空当K线
+	BiEndIsPeak    bool   `json:"biEndIsPeak"`    // 笔端点必须是极值
+	BiAllowSubPeak bool   `json:"biAllowSubPeak"` // 允许次级别峰
+
+	// ── 线段配置（来自 chan.py CSegConfig）──
+	SegAlgo       string `json:"segAlgo"`       // "chan" | "dyh" | "def"
+	LeftSegMethod string `json:"leftSegMethod"` // "peak" | "all"
+
+	// ── 中枢配置（来自 chan.py CZSConfig）──
+	ZsCombine     bool   `json:"zsCombine"`     // 是否合并中枢
+	ZsCombineMode string `json:"zsCombineMode"` // "zs" | "peak"
+	OneBiZs       bool   `json:"oneBiZs"`       // 允许单笔中枢
+	ZsAlgo        string `json:"zsAlgo"`        // "normal" | "over_seg" | "auto"
+
+	// ── 买卖点配置（来自 chan.py CBSPointConfig）──
+	BspDivergenceRate float64 `json:"bspDivergenceRate"`
+	BspMinZsCnt       int     `json:"bspMinZsCnt"`
+	Bsp1OnlyMultiBiZs bool    `json:"bsp1OnlyMultiBiZs"`
+	BspMaxBs2Rate     float64 `json:"bspMaxBs2Rate"`
+	BspMacdAlgo       string  `json:"bspMacdAlgo"` // "area"|"peak"|"full_area"|"diff"|"slope"|"amp"|...
+	Bsp1Peak          bool    `json:"bsp1Peak"`
+	BspType           string  `json:"bspType"` // "1,1p,2,2s,3a,3b"
+	Bsp2Follow1       bool    `json:"bsp2Follow1"`
+	Bsp3Follow1       bool    `json:"bsp3Follow1"`
+	Bsp3Peak          bool    `json:"bsp3Peak"`
+	Bsp2sFollow2      bool    `json:"bsp2sFollow2"`
+	StrictBsp3        bool    `json:"strictBsp3"`
+	Bsp3aMaxZsCnt     int     `json:"bsp3aMaxZsCnt"`
+
+	// ── 技术指标配置──
+	CalBoll      bool  `json:"calBoll"`
+	BollN        int   `json:"bollN"`
+	CalRsi       bool  `json:"calRsi"`
+	RsiCycle     int   `json:"rsiCycle"`
+	CalKdj       bool  `json:"calKdj"`
+	KdjCycle     int   `json:"kdjCycle"`
+	MeanMetrics  []int `json:"meanMetrics"`
+	TrendMetrics []int `json:"trendMetrics"`
+
+	// ── 包含处理选项──
+	Inclusion InclusionOption `json:"inclusion,omitempty"`
 }
 
 // DefaultConfig 返回默认配置。
@@ -317,6 +394,47 @@ func DefaultConfig() Config {
 		EnableMultiLevel:     false,
 		UpdateWindowSize:     300,   // 增量更新时重算最近 300 根
 		NewBiMinPriceRatio:   0.003, // 新笔标准最小价格变动 0.3%
+
+		// 笔配置默认值（对齐 chan.py）
+		BiAlgo:         "normal",
+		BiStrict:       true,
+		BiFxCheck:      "half",
+		GapAsKl:        false,
+		BiEndIsPeak:    true,
+		BiAllowSubPeak: true,
+
+		// 线段配置默认值
+		SegAlgo:       "chan",
+		LeftSegMethod: "peak",
+
+		// 中枢配置默认值
+		ZsCombine:     true,
+		ZsCombineMode: "zs",
+		OneBiZs:       false,
+		ZsAlgo:        "normal",
+
+		// 买卖点配置默认值
+		BspDivergenceRate: math.Inf(1),
+		BspMinZsCnt:       1,
+		Bsp1OnlyMultiBiZs: true,
+		BspMaxBs2Rate:     0.9999,
+		BspMacdAlgo:       "peak",
+		Bsp1Peak:          true,
+		BspType:           "1,1p,2,2s,3a,3b",
+		Bsp2Follow1:       true,
+		Bsp3Follow1:       true,
+		Bsp3Peak:          false,
+		Bsp2sFollow2:      false,
+		StrictBsp3:        false,
+		Bsp3aMaxZsCnt:     1,
+
+		// 技术指标默认关闭
+		CalBoll:  false,
+		BollN:    20,
+		CalRsi:   false,
+		RsiCycle: 14,
+		CalKdj:   false,
+		KdjCycle: 9,
 	}
 }
 

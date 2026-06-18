@@ -17,7 +17,8 @@ import "time"
 // MergeKlines 对 Kline 序列进行包含处理，返回合并后的新序列。
 // 输入必须是按时间升序排列的原始 K 线。
 // 返回的 K 线序列中不存在包含关系。
-func MergeKlines(klines []Kline) []Kline {
+// 可选参数 opts 控制精细包含行为（一字K线、顶底相等、跳过模式）。
+func MergeKlines(klines []Kline, opts ...InclusionOption) []Kline {
 	if klines == nil {
 		return nil
 	}
@@ -25,6 +26,12 @@ func MergeKlines(klines []Kline) []Kline {
 		result := make([]Kline, len(klines))
 		copy(result, klines)
 		return result
+	}
+
+	// 解析选项
+	var opt InclusionOption
+	if len(opts) > 0 {
+		opt = opts[0]
 	}
 
 	// 结果序列
@@ -35,17 +42,79 @@ func MergeKlines(klines []Kline) []Kline {
 		current := klines[i]
 		last := &result[len(result)-1]
 
-		if isContained(current, *last) {
-			// 存在包含关系，需要合并
+		// 精细包含判定
+		containDir := testContainment(*last, current, opt.AllowTopEqual)
+
+		switch containDir {
+		case containCombine:
+			// 一字K线（High==Low）不合并，避免无意义合并
+			if current.High == current.Low && last.High == last.Low {
+				result = append(result, current)
+				continue
+			}
+			if opt.ExcludeIncluded {
+				// exclude_included 模式：被包含的直接跳过
+				continue
+			}
 			dir := determineDirection(result)
+			// 一字K线方向处理：同向合并时跳过更新
+			if dir == DirUp && (current.High == current.Low || current.High == last.High) {
+				result = append(result, current)
+				continue
+			}
+			if dir == DirDown && (current.High == current.Low || current.Low == last.Low) {
+				result = append(result, current)
+				continue
+			}
 			merged := mergePair(*last, current, dir)
 			result[len(result)-1] = merged
-		} else {
+		case containUp:
+			result = append(result, current)
+		case containDown:
 			result = append(result, current)
 		}
 	}
 
 	return result
+}
+
+// containmentResult 枚举包含判定结果。
+type containmentResult int
+
+const (
+	containCombine containmentResult = iota // 需要合并
+	containUp                               // 向上关系
+	containDown                             // 向下关系
+)
+
+// testContainment 精细包含判定（移植自 chan.py CKLine_Combiner.test_combine）。
+// allowTopEqual: 1=被包含时顶相等不合并, -1=被包含时底相等不合并, 0=标准模式
+func testContainment(last, curr Kline, allowTopEqual int) containmentResult {
+	// last 包含 curr（curr 在 last 范围内）
+	if last.High >= curr.High && last.Low <= curr.Low {
+		return containCombine
+	}
+	// curr 包含 last（last 在 curr 范围内）
+	if last.High <= curr.High && last.Low >= curr.Low {
+		// allowTopEqual 精细控制
+		if allowTopEqual == 1 && last.High == curr.High && last.Low > curr.Low {
+			return containDown
+		}
+		if allowTopEqual == -1 && last.Low == curr.Low && last.High < curr.High {
+			return containUp
+		}
+		return containCombine
+	}
+	// 向上关系
+	if last.High < curr.High && last.Low < curr.Low {
+		return containUp
+	}
+	// 向下关系
+	if last.High > curr.High && last.Low > curr.Low {
+		return containDown
+	}
+	// 其他情况（不应出现），默认合并
+	return containCombine
 }
 
 // isContained 判断两根 K 线是否存在包含关系。

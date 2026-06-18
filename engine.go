@@ -37,8 +37,8 @@ func (e *Engine) processInternal(klines []Kline) (*Result, error) {
 		return nil, err
 	}
 
-	// 步骤 1: K 线包含处理
-	merged := MergeKlines(klines)
+	// 步骤 1: K 线包含处理（支持精细包含选项）
+	merged := MergeKlines(klines, e.config.Inclusion)
 	if len(merged) < 3 {
 		return nil, fmt.Errorf("chanlun: too few klines after inclusion: %d", len(merged))
 	}
@@ -66,27 +66,33 @@ func (e *Engine) processInternal(klines []Kline) (*Result, error) {
 		}
 	}
 
-	// 步骤 5+6: 线段划分
-	segments := BuildSegments(mergedBis)
+	// 步骤 5+6: 线段划分（支持多算法）
+	segments := BuildSegmentsWithAlgo(mergedBis, e.config.SegAlgo)
 
-	// 步骤 7: 中枢识别
+	// 步骤 7: 中枢识别 + 可选合并
 	pivots := FindPivots(segments)
+	if e.config.ZsCombine {
+		pivots = CombinePivots(pivots, e.config.ZsCombineMode)
+	}
 
 	// 步骤 8: 走势类型分类
 	trends := ClassifyTrends(pivots)
 
 	// 步骤 9: 多级别联立（预留）
 
-	// 步骤 10: 背驰检测
+	// 步骤 10: 背驰检测（支持多种力度指标）
+	forceMetric := ParseForceMetricType(e.config.BspMacdAlgo)
 	var deviations []Deviation
 	var trendDeviations []Deviation
 	if len(merged) > e.config.MACDSlowPeriod {
-		// MACD 在已合并 K 线上计算，保持索引空间与 segments/fractals/bis 一致
 		closePrices := extractClose(merged)
 		macdResult, err := talib.MACD(closePrices, e.config.MACDFastPeriod,
 			e.config.MACDSlowPeriod, e.config.MACDSignalPeriod)
 		if err == nil && macdResult != nil {
-			deviations = DetectDeviations(segments, macdResult.MACD, macdResult.Signal, macdResult.Histogram)
+			volumes := extractVolumes(merged)
+			turnovers := extractTurnovers(merged)
+			deviations = DetectDeviationsWithMetric(segments, macdResult.MACD, macdResult.Signal, macdResult.Histogram,
+				forceMetric, volumes, turnovers, closePrices)
 			trendDeviations = DetectTrendDeviations(segments, pivots, trends,
 				macdResult.MACD, macdResult.Signal, macdResult.Histogram)
 		}
@@ -96,8 +102,8 @@ func (e *Engine) processInternal(klines []Kline) (*Result, error) {
 	// 用背驰检测结果更新走势完成状态（走势必完美定理）
 	UpdateTrendsWithDeviations(trends, trendDeviations)
 
-	// 步骤 11: 买卖点判定
-	signals := DetectSignals(trends, allDeviations, pivots, segments)
+	// 步骤 11: 买卖点判定（支持高级配置过滤）
+	signals := DetectSignalsWithConfig(trends, allDeviations, pivots, segments, e.config)
 
 	// 步骤 12: 信号强度评分
 	liquidityData := extractLiquidity(merged)
@@ -151,4 +157,29 @@ func extractLiquidity(klines []Kline) []float64 {
 		}
 	}
 	return volumes
+}
+
+// extractVolumes 从 K 线序列中提取成交量序列。
+func extractVolumes(klines []Kline) []float64 {
+	volumes := make([]float64, len(klines))
+	for i, c := range klines {
+		volumes[i] = c.BaseVolume
+	}
+	return volumes
+}
+
+// extractTurnovers 从 K 线序列中提取成交额序列。
+func extractTurnovers(klines []Kline) []float64 {
+	turnovers := make([]float64, len(klines))
+	for i, c := range klines {
+		switch {
+		case c.Turnover > 0:
+			turnovers[i] = c.Turnover
+		case c.QuoteVolume > 0:
+			turnovers[i] = c.QuoteVolume
+		default:
+			turnovers[i] = c.BaseVolume
+		}
+	}
+	return turnovers
 }

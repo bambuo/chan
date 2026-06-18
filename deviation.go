@@ -32,25 +32,32 @@ import (
 //	信号强度分级：走势背驰 > 线段背驰（盘整背驰）> 笔背驰
 //	最终的结构验证（a+A+b+B+c）在 DetectTrendDeviations 中完成。
 func DetectDeviations(segments []Segment, macdMACD, macdSignal, macdHist []float64) []Deviation {
+	return DetectDeviationsWithMetric(segments, macdMACD, macdSignal, macdHist, ForcePeak, nil, nil, nil)
+}
+
+// DetectDeviationsWithMetric 使用指定力度指标检测背驰。
+// forceMetric: 力度指标类型（来自 chan.py 的 12 种）
+// volumes/turnovers/closes: 可选的成交量/成交额/收盘价序列
+func DetectDeviationsWithMetric(segments []Segment, macdMACD, macdSignal, macdHist []float64,
+	forceMetric ForceMetricType, volumes, turnovers, closes []float64) []Deviation {
 	if len(segments) < 2 {
 		return nil
 	}
 
 	deviations := make([]Deviation, 0)
 
-	// 在相邻线段之间检测背驰
 	for i := 1; i < len(segments); i++ {
 		prev := segments[i-1]
 		curr := segments[i]
 
-		// 同向线段才进行背驰比较
 		if prev.Direction != curr.Direction {
 			continue
 		}
 
-		dev := compareSegments(prev, i-1, curr, i, macdMACD, macdSignal, macdHist)
+		dev := compareSegmentsWithMetric(prev, i-1, curr, i, macdMACD, macdSignal, macdHist,
+			forceMetric, volumes, turnovers, closes)
 		if dev != nil {
-			dev.Type = "range" // 线段间背驰，默认为盘整背驰（具体类型由上层决定）
+			dev.Type = "range"
 			deviations = append(deviations, *dev)
 		}
 	}
@@ -179,6 +186,91 @@ func compareSegments(prev Segment, prevIdx int, curr Segment, currIdx int, macdM
 		MACDAreaAfter:  areaAfter,
 		MACDDiffBefore: diffBefore,
 		MACDDiffAfter:  diffAfter,
+	}
+}
+
+// compareSegmentsWithMetric 比较两段同向线段的力度（使用指定力度指标）。
+func compareSegmentsWithMetric(prev Segment, prevIdx int, curr Segment, currIdx int,
+	macdMACD, macdSignal, macdHist []float64,
+	forceMetric ForceMetricType, volumes, turnovers, closes []float64) *Deviation {
+
+	priceBreak := false
+	devDir := DirNone
+
+	if prev.Direction == DirUp {
+		if curr.Top > prev.Top {
+			priceBreak = true
+			devDir = DirUp
+		}
+	} else {
+		if curr.Bottom < prev.Bottom {
+			priceBreak = true
+			devDir = DirDown
+		}
+	}
+
+	if !priceBreak {
+		return nil
+	}
+
+	// MACD 三要素检查
+	areaBefore := calcMACDArea(prev, macdHist)
+	areaAfter := calcMACDArea(curr, macdHist)
+	diffBefore := calcMACDDiff(prev, macdMACD)
+	diffAfter := calcMACDDiff(curr, macdMACD)
+
+	if !checkMACDDeviation(areaBefore, areaAfter, diffBefore, diffAfter, prev, curr, macdMACD, macdSignal) {
+		return nil
+	}
+
+	// 使用指定力度指标计算力度值
+	prevBi := segToBi(prev)
+	currBi := segToBi(curr)
+	forceBefore := CalcForceMetric(prevBi, forceMetric, false, macdHist, macdMACD, volumes, turnovers, closes)
+	forceAfter := CalcForceMetric(currBi, forceMetric, true, macdHist, macdMACD, volumes, turnovers, closes)
+
+	return &Deviation{
+		Level:          SegmentDeviation,
+		Direction:      devDir,
+		SegmentBefore:  &prev,
+		SegmentAfter:   &curr,
+		SegBeforeIdx:   prevIdx,
+		SegAfterIdx:    currIdx,
+		PriceHigh:      curr.Top,
+		ForceBefore:    forceBefore,
+		ForceAfter:     forceAfter,
+		MACDAreaBefore: areaBefore,
+		MACDAreaAfter:  areaAfter,
+		MACDDiffBefore: diffBefore,
+		MACDDiffAfter:  diffAfter,
+	}
+}
+
+// segToBi 将 Segment 转换为 Bi（用于力度指标计算）。
+func segToBi(seg Segment) Bi {
+	if len(seg.BiList) > 0 {
+		firstBi := seg.BiList[0].Bi
+		lastBi := seg.BiList[len(seg.BiList)-1].Bi
+		return Bi{
+			StartIndex: firstBi.StartIndex,
+			EndIndex:   lastBi.EndIndex,
+			Direction:  seg.Direction,
+			StartPrice: firstBi.StartPrice,
+			EndPrice:   lastBi.EndPrice,
+			High:       seg.Top,
+			Low:        seg.Bottom,
+			Length:     seg.Top - seg.Bottom,
+			KLineCount: seg.EndIndex - seg.StartIndex + 1,
+		}
+	}
+	return Bi{
+		StartIndex: seg.StartIndex,
+		EndIndex:   seg.EndIndex,
+		Direction:  seg.Direction,
+		High:       seg.Top,
+		Low:        seg.Bottom,
+		Length:     seg.Top - seg.Bottom,
+		KLineCount: seg.EndIndex - seg.StartIndex + 1,
 	}
 }
 

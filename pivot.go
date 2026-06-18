@@ -1,5 +1,7 @@
 package chanlun
 
+import "math"
+
 // ──────────────────────────────────────────────
 // §5  中枢
 // ──────────────────────────────────────────────
@@ -59,6 +61,9 @@ func FindPivots(segments []Segment) []Pivot {
 			gg := max(max(s0.Top, s1.Top), s2.Top)
 			dd := min(min(s0.Bottom, s1.Bottom), s2.Bottom)
 
+			// PeakHigh/PeakLow：中枢内所有笔的波动极值
+			peakHigh, peakLow := calcPivotPeaks([]Segment{s0, s1, s2})
+
 			pivot := Pivot{
 				StartIndex:   s0.StartIndex,
 				EndIndex:     s2.EndIndex,
@@ -66,6 +71,8 @@ func FindPivots(segments []Segment) []Pivot {
 				ZD:           zd,
 				GG:           gg,
 				DD:           dd,
+				PeakHigh:     peakHigh,
+				PeakLow:      peakLow,
 				Segments:     []Segment{s0, s1, s2},
 				OverlapCount: 3,
 				Level:        1,
@@ -255,4 +262,81 @@ func checkThirdBuySell(segments []Segment, pos int, pivot Pivot) *thirdBuySellIn
 func CheckPivotEnlargement(p1, p2 Pivot) bool {
 	// 两个中枢各自的波动全范围 [DD, GG]
 	return p1.GG >= p2.DD && p2.GG >= p1.DD
+}
+
+// CombinePivots 合并重叠的中枢（移植自 chan.py CZSList.try_combine）。
+// mode: "zs" 模式使用中枢区间 [ZD,ZG] 重叠判断；
+//
+//	"peak" 模式使用波动区间 [DD,GG] 重叠判断。
+//
+// 合并后，前一个中枢的区间扩大，后一个被删除。
+func CombinePivots(pivots []Pivot, mode string) []Pivot {
+	if len(pivots) < 2 {
+		return pivots
+	}
+
+	result := make([]Pivot, 0, len(pivots))
+	result = append(result, pivots[0])
+
+	for i := 1; i < len(pivots); i++ {
+		last := &result[len(result)-1]
+		curr := &pivots[i]
+
+		if canCombinePivots(*last, *curr, mode) {
+			// 合并：扩大前一个中枢的区间
+			last.ZD = min(last.ZD, curr.ZD)
+			last.ZG = max(last.ZG, curr.ZG)
+			last.PeakLow = min(last.PeakLow, curr.PeakLow)
+			last.PeakHigh = max(last.PeakHigh, curr.PeakHigh)
+			last.GG = max(last.GG, curr.GG)
+			last.DD = min(last.DD, curr.DD)
+			last.EndIndex = curr.EndIndex
+			last.Segments = append(last.Segments, curr.Segments...)
+			last.OverlapCount += curr.OverlapCount
+		} else {
+			result = append(result, *curr)
+		}
+	}
+
+	return result
+}
+
+// canCombinePivots 判断两个中枢是否可以合并。
+func canCombinePivots(p1, p2 Pivot, mode string) bool {
+	switch mode {
+	case "peak":
+		// 波动区间 [DD,GG] 重叠
+		return hasOverlap(p1.PeakLow, p1.PeakHigh, p2.PeakLow, p2.PeakHigh)
+	default:
+		// "zs" 模式：中枢区间 [ZD,ZG] 重叠
+		return hasOverlap(p1.ZD, p1.ZG, p2.ZD, p2.ZG)
+	}
+}
+
+// hasOverlap 判断两个区间是否有重叠（含相等边界）。
+func hasOverlap(low1, high1, low2, high2 float64) bool {
+	return low1 <= high2 && low2 <= high1
+}
+
+// calcPivotPeaks 从中枢的线段笔列表中计算波动极值（peak_high, peak_low）。
+func calcPivotPeaks(segments []Segment) (peakHigh, peakLow float64) {
+	peakHigh = math.Inf(-1)
+	peakLow = math.Inf(1)
+	for _, seg := range segments {
+		for _, mb := range seg.BiList {
+			if mb.High > peakHigh {
+				peakHigh = mb.High
+			}
+			if mb.Low < peakLow {
+				peakLow = mb.Low
+			}
+		}
+	}
+	if math.IsInf(peakHigh, -1) {
+		peakHigh = 0
+	}
+	if math.IsInf(peakLow, 1) {
+		peakLow = 0
+	}
+	return
 }

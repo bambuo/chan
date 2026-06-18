@@ -69,6 +69,9 @@ type StreamEngine struct {
 	// MACD 增量状态
 	macd *macdIncremental
 
+	// 技术指标计算器
+	indicators *IndicatorCalculator
+
 	// 最近快照缓存
 	lastResult *Result
 }
@@ -79,8 +82,9 @@ func NewStreamEngine(config Config) (*StreamEngine, error) {
 		return nil, fmt.Errorf("chanlun stream: %w", err)
 	}
 	return &StreamEngine{
-		config: config,
-		macd:   newMacdIncremental(config.MACDFastPeriod, config.MACDSlowPeriod, config.MACDSignalPeriod),
+		config:     config,
+		macd:       newMacdIncremental(config.MACDFastPeriod, config.MACDSlowPeriod, config.MACDSignalPeriod),
+		indicators: NewIndicatorCalculator(config),
 	}, nil
 }
 
@@ -150,8 +154,11 @@ func (s *StreamEngine) AddKline(k Kline) *IncrementalResult {
 	// 2. 增量 MACD
 	s.macd.addOne(k.Close)
 
+	// 2b. 增量技术指标计算
+	kWithIndicators := s.indicators.AddKline(k)
+
 	// 3. 包含处理
-	merged := s.tryMergeKline(k)
+	merged := s.tryMergeKline(kWithIndicators)
 	if !merged {
 		inc.NewMergedKlines = []Kline{s.mergedTail.Kline}
 	}
