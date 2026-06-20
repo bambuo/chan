@@ -166,7 +166,7 @@ func TestBuildBisWithConfig(t *testing.T) {
 			l = 95 + phase*2 - 3
 		}
 		klines[i] = Kline{
-			Time:  baseTime.Add(time.Duration(i) * time.Hour),
+			Time:  DateTime{Time: baseTime.Add(time.Duration(i) * time.Hour)},
 			High:  h,
 			Low:   l,
 			Close: (h + l) / 2,

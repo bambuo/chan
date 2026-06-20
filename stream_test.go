@@ -25,7 +25,7 @@ func generateTestKlines(n int) []Kline {
 		offset := float64(i%10) * direction
 
 		klines[i] = Kline{
-			Time:  baseTime.Add(time.Duration(i) * time.Hour),
+			Time:  DateTime{Time: baseTime.Add(time.Duration(i) * time.Hour)},
 			Open:  price + offset,
 			High:  price + offset + 1.0,
 			Low:   price + offset - 1.0,

@@ -1,7 +1,5 @@
 package chanlun
 
-import "time"
-
 // ──────────────────────────────────────────────
 // §1  K 线包含处理
 // ──────────────────────────────────────────────
@@ -154,7 +152,7 @@ func determineDirection(klines []Kline) Direction {
 func mergePair(a, b Kline, dir Direction) Kline {
 	// 取一根时间戳较新的
 	t := a.Time
-	if b.Time.After(a.Time) {
+	if b.Time.After(a.Time.Time) {
 		t = b.Time
 	}
 
@@ -175,7 +173,7 @@ func mergePair(a, b Kline, dir Direction) Kline {
 	return merged
 }
 
-func mergeKlineMeta(a, b Kline, t time.Time) Kline {
+func mergeKlineMeta(a, b Kline, t DateTime) Kline {
 	return Kline{
 		Time:            t,
 		Open:            a.Open,

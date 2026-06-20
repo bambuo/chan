@@ -17,7 +17,7 @@ func generateBenchKlines(n int) []Kline {
 		trend := float64(i) * 0.15
 		mid := 100.0 + trend + osc
 		klines[i] = Kline{
-			Time:       t.Add(time.Duration(i) * time.Hour),
+			Time:       DateTime{Time: t.Add(time.Duration(i) * time.Hour)},
 			Open:       mid - 0.5,
 			High:       mid + 2.0,
 			Low:        mid - 1.5,
@@ -59,7 +59,7 @@ func BenchmarkEngine_Update(b *testing.B) {
 	}
 
 	newKline := Kline{
-		Time:       time.Now(),
+		Time:       DateTime{Time: time.Now()},
 		Open:       105,
 		High:       108,
 		Low:        103,
@@ -201,9 +201,9 @@ func TestKlineValidation(t *testing.T) {
 	t1 := valid
 	t2 := valid
 	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	t0.Time = baseTime
-	t1.Time = baseTime.Add(time.Hour)
-	t2.Time = baseTime.Add(2 * time.Hour)
+	t0.Time = DateTime{Time: baseTime}
+	t1.Time = DateTime{Time: baseTime.Add(time.Hour)}
+	t2.Time = DateTime{Time: baseTime.Add(2 * time.Hour)}
 
 	tests := []struct {
 		name    string

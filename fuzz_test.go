@@ -21,7 +21,7 @@ func FuzzProcess(f *testing.F) {
 		for i := range klines {
 			noise := float64(i) * 0.1
 			klines[i] = Kline{
-				Time:       baseTime.Add(time.Duration(i) * time.Hour),
+				Time:       DateTime{Time: baseTime.Add(time.Duration(i) * time.Hour)},
 				Open:       open + noise,
 				High:       math.Max(open, high) + noise,
 				Low:        math.Min(low, math.Min(open, close)) + noise,
@@ -205,7 +205,7 @@ func TestRaceCondition(t *testing.T) {
 		go func(id int) {
 			for i := 0; i < 20; i++ {
 				c := Kline{
-					Time:       time.Now(),
+					Time:       DateTime{Time: time.Now()},
 					Open:       100 + float64(i),
 					High:       102 + float64(i),
 					Low:        98 + float64(i),

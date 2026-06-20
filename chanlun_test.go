@@ -7,11 +7,11 @@ import (
 )
 
 func kline(h, l float64) Kline {
-	return Kline{High: h, Low: l, Time: time.Now()}
+	return Kline{High: h, Low: l, Time: DateTime{Time: time.Now()}}
 }
 
 func klineOHLC(o, h, l, c float64) Kline {
-	return Kline{Open: o, High: h, Low: l, Close: c, Time: time.Now()}
+	return Kline{Open: o, High: h, Low: l, Close: c, Time: DateTime{Time: time.Now()}}
 }
 
 // ──────────────────────────────────────────────
@@ -766,7 +766,7 @@ func generateFractalKlines(count int) []Kline {
 		mid := base + osc
 
 		klines[i] = Kline{
-			Time:       t.Add(time.Duration(i) * time.Hour),
+			Time:       DateTime{Time: t.Add(time.Duration(i) * time.Hour)},
 			Open:       mid - 0.5,
 			High:       mid + 2.0,
 			Low:        mid - 1.5,
@@ -843,7 +843,7 @@ func TestEngine_Update_Incremental(t *testing.T) {
 	// 增量更新一根 K 线
 	last := klines[len(klines)-1]
 	newKline := Kline{
-		Time:       last.Time.Add(time.Hour),
+		Time:       DateTime{Time: last.Time.Add(time.Hour)},
 		Open:       last.Close - 1,
 		High:       last.Close + 3,
 		Low:        last.Close - 2,

@@ -3,6 +3,45 @@ package chanlun
 import (
 	"math"
 	"time"
+
+	"github.com/gocarina/gocsv"
+)
+
+// DateTime 封装 time.Time，实现 gocsv 序列化接口。
+// CSV 格式："2006-01-02 15:04:05"；JSON 保持 RFC3339。
+type DateTime struct {
+	time.Time
+}
+
+// MarshalCSV 实现 gocsv.TypeMarshaller。
+func (d DateTime) MarshalCSV() (string, error) {
+	return d.Format(time.DateTime), nil
+}
+
+// UnmarshalCSV 实现 gocsv.TypeUnmarshaller。
+func (d *DateTime) UnmarshalCSV(csv string) error {
+	t, err := time.Parse(time.DateTime, csv)
+	if err != nil {
+		return err
+	}
+	d.Time = t
+	return nil
+}
+
+// MarshalJSON 保持 RFC3339 JSON 输出。
+func (d DateTime) MarshalJSON() ([]byte, error) {
+	return d.Time.MarshalJSON()
+}
+
+// UnmarshalJSON 保持 RFC3339 JSON 解析。
+func (d *DateTime) UnmarshalJSON(data []byte) error {
+	return d.Time.UnmarshalJSON(data)
+}
+
+// Ensure DateTime implements gocsv interfaces at compile time.
+var (
+	_ gocsv.TypeMarshaller   = DateTime{}
+	_ gocsv.TypeUnmarshaller = &DateTime{}
 )
 
 // ──────────────────────────────────────────────
@@ -25,17 +64,17 @@ type KDJValue struct {
 
 // Kline 表示算法层统一使用的 K 线数据结构。
 type Kline struct {
-	Time            time.Time `json:"time"`
-	Open            float64   `json:"open"`
-	High            float64   `json:"high"`
-	Low             float64   `json:"low"`
-	Close           float64   `json:"close"`
-	BaseVolume      float64   `json:"baseVolume"`
-	QuoteVolume     float64   `json:"quoteVolume,omitempty"`
-	Turnover        float64   `json:"turnover,omitempty"`
-	TradeCount      int64     `json:"tradeCount,omitempty"`
-	RawVolumeUnit   string    `json:"rawVolumeUnit,omitempty"`
-	RawTurnoverUnit string    `json:"rawTurnoverUnit,omitempty"`
+	Time            DateTime `json:"time" csv:"time"`
+	Open            float64  `json:"open" csv:"open"`
+	High            float64  `json:"high" csv:"high"`
+	Low             float64  `json:"low" csv:"low"`
+	Close           float64  `json:"close" csv:"close"`
+	BaseVolume      float64  `json:"baseVolume" csv:"baseVolume"`
+	QuoteVolume     float64  `json:"quoteVolume,omitempty"`
+	Turnover        float64  `json:"turnover,omitempty"`
+	TradeCount      int64    `json:"tradeCount,omitempty"`
+	RawVolumeUnit   string   `json:"rawVolumeUnit,omitempty"`
+	RawTurnoverUnit string   `json:"rawTurnoverUnit,omitempty"`
 
 	// 技术指标（可选，由 StreamEngine 按需计算）
 	BOLL *BOLLValue      `json:"boll,omitempty"`

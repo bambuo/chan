@@ -90,7 +90,7 @@ func ValidateKlines(klines []Kline) error {
 		if c.BaseVolume < 0 || c.QuoteVolume < 0 || c.Turnover < 0 || c.TradeCount < 0 {
 			return fmt.Errorf("kline[%d]: negative volume/turnover/trade count", i)
 		}
-		if i > 0 && !klines[i-1].Time.IsZero() && !c.Time.IsZero() && !c.Time.After(klines[i-1].Time) {
+		if i > 0 && !klines[i-1].Time.IsZero() && !c.Time.IsZero() && !c.Time.After(klines[i-1].Time.Time) {
 			return fmt.Errorf("kline[%d]: time must be strictly ascending", i)
 		}
 	}

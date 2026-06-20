@@ -9,9 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"time"
 
-	"github.com/bambuo/chan"
+	csv "github.com/gocarina/gocsv"
+
+	chanlun "github.com/bambuo/chan"
 )
 
 func main() {
@@ -22,7 +25,7 @@ func main() {
 	}
 
 	// 2. 准备 K 线数据（通常来自交易所 API）
-	klines := generateSampleData(200)
+	klines := readKline("/Users/johana/Codes/github/canlun/dataset/ETHUSDT_1m.csv")
 
 	// 3. 运行完整分析
 	result, err := engine.Process(klines)
@@ -90,13 +93,34 @@ func generateSampleData(n int) []chanlun.Kline {
 		trend := float64(i) * 0.15
 		mid := 100.0 + trend + osc
 		klines[i] = chanlun.Kline{
-			Time:       t.Add(time.Duration(i) * time.Hour),
+			Time:       chanlun.DateTime{Time: t.Add(time.Duration(i) * time.Hour)},
 			Open:       mid - 0.5,
 			High:       mid + 2.0,
 			Low:        mid - 1.5,
 			Close:      mid + 0.3,
 			BaseVolume: 1000,
 		}
+	}
+	return klines
+}
+
+func readKline(fp string) []chanlun.Kline {
+	if fp == "" {
+		return generateSampleData(200)
+	}
+
+	header := []byte("time,open,high,low,close,baseVolume\n")
+	data, err := os.ReadFile(fp)
+	if err != nil {
+		panic(err)
+	}
+	data = append(header, data...)
+
+	var klines []chanlun.Kline
+
+	err = csv.UnmarshalBytes(data, &klines)
+	if err != nil {
+		panic(err)
 	}
 	return klines
 }

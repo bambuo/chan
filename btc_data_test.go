@@ -77,7 +77,7 @@ func loadBTCData(path string) ([]Kline, error) {
 	klines := make([]Kline, len(data.Klines))
 	for i, c := range data.Klines {
 		klines[i] = Kline{
-			Time:       time.UnixMilli(c.OpenTime),
+			Time:       DateTime{Time: time.UnixMilli(c.OpenTime)},
 			Open:       c.Open,
 			High:       c.High,
 			Low:        c.Low,
@@ -86,7 +86,7 @@ func loadBTCData(path string) ([]Kline, error) {
 		}
 	}
 	sort.SliceStable(klines, func(i, j int) bool {
-		return klines[i].Time.Before(klines[j].Time)
+		return klines[i].Time.Before(klines[j].Time.Time)
 	})
 
 	return klines, nil

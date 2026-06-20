@@ -94,7 +94,7 @@ func generateTrendData(n int) []chanlun.Kline {
 		}
 		mid := 100.0 + trend + osc
 		klines[i] = chanlun.Kline{
-			Time:       t.Add(time.Duration(i) * time.Hour),
+			Time:       chanlun.DateTime{Time: t.Add(time.Duration(i) * time.Hour)},
 			Open:       mid - 0.5,
 			High:       mid + 2.0,
 			Low:        mid - 1.5,
