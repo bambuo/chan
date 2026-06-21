@@ -1,6 +1,10 @@
 package bi
 
-import "github.com/bambuo/chan/types"
+import (
+	"math"
+
+	"github.com/bambuo/chan/types"
+)
 
 // BuildBis 从分型列表构建笔序列（状态机，对齐 chan.py CBiList）。
 func BuildBis(klines []types.Kline, fractals []types.Fractal, config types.Config) []types.Bi {
@@ -103,7 +107,8 @@ func (m *machine) delVirt() {
 		m.bis[li].KLineCount = m.bis[li].EndIndex - m.bis[li].StartIndex + 1
 		m.sure[li] = true
 		m.used[li] = true
-		m.lastEnd = &types.Fractal{Index: m.bis[li].EndIndex, Type: m.bis[li].EndFractalType()}
+		// lastEnd 必须携带正确的 High/Low，否则后续 add 会读到 0 导致 StartPrice=0。
+		m.lastEnd = m.fractalFromIndex(m.bis[li].EndIndex, m.bis[li].EndFractalType())
 		for j := 1; j < len(m.ends[li]); j++ {
 			m.add(m.bis[len(m.bis)-1].ToEndFractal(), m.ends[li][j], true)
 		}
@@ -115,9 +120,23 @@ func (m *machine) delVirt() {
 		m.ends = m.ends[:li]
 	}
 	if len(m.bis) > 0 {
-		m.lastEnd = &types.Fractal{Index: m.bis[len(m.bis)-1].EndIndex, Type: m.bis[len(m.bis)-1].EndFractalType()}
+		last := &m.bis[len(m.bis)-1]
+		m.lastEnd = m.fractalFromIndex(last.EndIndex, last.EndFractalType())
 	} else {
 		m.lastEnd = nil
+	}
+}
+
+// fractalFromIndex 从合并 K 线序列构造一个携带 High/Low 的分型。
+// 用于在 delVirt 等场景恢复 lastEnd 时避免 High/Low 缺省为 0 导致下游 StartPrice=0。
+func (m *machine) fractalFromIndex(idx int, ft types.FractalType) *types.Fractal {
+	if idx < 0 || idx >= len(m.klines) {
+		// 越界兜底：退化为零值分型（不应发生）。
+		return &types.Fractal{Index: idx, Type: ft}
+	}
+	return &types.Fractal{
+		Index: idx, Type: ft,
+		High: m.klines[idx].High, Low: m.klines[idx].Low,
 	}
 }
 
@@ -149,10 +168,10 @@ func (m *machine) updEnd(f *types.Fractal) {
 	if l.IsDown() && f.Type != types.BottomFractal {
 		return
 	}
-	if l.IsUp() && f.High < l.EndPrice {
+	if l.IsUp() && f.High <= l.EndPrice {
 		return
 	}
-	if l.IsDown() && f.Low > l.EndPrice {
+	if l.IsDown() && f.Low >= l.EndPrice {
 		return
 	}
 	if vit {
@@ -314,28 +333,55 @@ func (m *machine) tryAddVirtualBi(lastKlIdx int) {
 	if lastKlIdx == l.EndIndex {
 		return
 	}
-	// 同向延伸
-	if (l.IsUp() && m.klines[lastKlIdx].High >= m.klines[l.EndIndex].High) ||
-		(l.IsDown() && m.klines[lastKlIdx].Low <= m.klines[l.EndIndex].Low) {
+	// 同向延伸：最后一笔方向上的极值继续刷新。
+	// EndPrice 必须取方向对应的极值，避免向下笔终点被更高收盘价覆盖
+	// （否则会出现"向下笔终点高于起点"的非法笔）。
+	if l.IsUp() && m.klines[lastKlIdx].High >= m.klines[l.EndIndex].High {
 		l.EndIndex = lastKlIdx
-		l.EndPrice = m.klines[lastKlIdx].Close
+		l.EndPrice = m.klines[lastKlIdx].High
+		l.High = max(l.High, m.klines[lastKlIdx].High)
+		l.Low = min(l.Low, m.klines[lastKlIdx].Low)
 		l.KLineCount = l.EndIndex - l.StartIndex + 1
+		l.Length = l.EndPrice - l.StartPrice
+		if l.Length < 0 {
+			l.Length = -l.Length
+		}
+		if l.KLineCount > 0 {
+			l.Slope = l.Length / float64(l.KLineCount)
+		}
+		m.sure[li] = false
+		return
+	}
+	if l.IsDown() && m.klines[lastKlIdx].Low <= m.klines[l.EndIndex].Low {
+		l.EndIndex = lastKlIdx
+		l.EndPrice = m.klines[lastKlIdx].Low
+		l.High = max(l.High, m.klines[lastKlIdx].High)
+		l.Low = min(l.Low, m.klines[lastKlIdx].Low)
+		l.KLineCount = l.EndIndex - l.StartIndex + 1
+		l.Length = l.StartPrice - l.EndPrice
+		if l.Length < 0 {
+			l.Length = -l.Length
+		}
+		if l.KLineCount > 0 {
+			l.Slope = l.Length / float64(l.KLineCount)
+		}
 		m.sure[li] = false
 		return
 	}
 	// 反向：尝试构成新笔
+	// 最后一笔 l 向上结束后，反向新笔向下，终点应为底分型；
+	// l 向下结束后，反向新笔向上，终点应为顶分型。
 	tmpIdx := lastKlIdx
 	for tmpIdx > l.EndIndex {
 		vf := types.Fractal{
 			Index: tmpIdx,
-			Type:  types.BottomFractal,
 			High:  m.klines[tmpIdx].High,
 			Low:   m.klines[tmpIdx].Low,
 		}
 		if l.IsUp() {
-			vf.Type = types.TopFractal
+			vf.Type = types.BottomFractal // 向上笔之后接向下笔，终点为底分型
 		} else {
-			vf.Type = types.BottomFractal
+			vf.Type = types.TopFractal // 向下笔之后接向上笔，终点为顶分型
 		}
 		le := types.Fractal{
 			Index: l.EndIndex,
@@ -372,10 +418,7 @@ func (m *machine) tryUpdPeakVirtual(f types.Fractal) bool {
 		return false
 	}
 	// Pop last, try update prev
-	m.bis = m.bis[:len(m.bis)-1]
-	m.sure = m.sure[:len(m.sure)]
-	m.used = m.used[:len(m.used)]
-	m.ends = m.ends[:len(m.ends)]
+	m.truncateState(len(m.bis) - 1)
 	if len(m.bis) > 0 {
 		pr := &m.bis[len(m.bis)-1]
 		if (pr.IsUp() && f.Type == types.TopFractal && f.High >= pr.EndPrice) ||
@@ -390,6 +433,13 @@ func (m *machine) tryUpdPeakVirtual(f types.Fractal) bool {
 	return false
 }
 
+func (m *machine) truncateState(n int) {
+	m.bis = m.bis[:n]
+	m.sure = m.sure[:n]
+	m.used = m.used[:n]
+	m.ends = m.ends[:n]
+}
+
 func fxPrice(f *types.Fractal) float64 {
 	if f.Type == types.TopFractal {
 		return f.High
@@ -399,9 +449,9 @@ func fxPrice(f *types.Fractal) float64 {
 
 func toFractal(bi *types.Bi) types.Fractal {
 	if bi.IsUp() {
-		return types.Fractal{Index: bi.StartIndex, Type: types.BottomFractal, High: bi.EndPrice, Low: bi.StartPrice}
+		return types.Fractal{Index: bi.StartIndex, Type: types.BottomFractal, High: bi.High, Low: bi.Low}
 	}
-	return types.Fractal{Index: bi.StartIndex, Type: types.TopFractal, High: bi.StartPrice, Low: bi.EndPrice}
+	return types.Fractal{Index: bi.StartIndex, Type: types.TopFractal, High: bi.High, Low: bi.Low}
 }
 
 func fxValid(klines []types.Kline, start, end types.Fractal, method string) bool {
@@ -412,16 +462,16 @@ func fxValid(klines []types.Kline, start, end types.Fractal, method string) bool
 		var eh, sl float64
 		switch method {
 		case "half":
-			eh = maxf(klineHigh(klines, end.Index-1), end.High)
-			sl = minf(start.Low, klineLow(klines, start.Index+1))
+			eh = max(klineHigh(klines, end.Index-1), end.High)
+			sl = min(start.Low, klineLow(klines, start.Index+1))
 		case "loss":
 			eh, sl = end.High, start.Low
 		case "strict", "totally":
-			eh = maxf(maxf(klineHigh(klines, end.Index-1), end.High), klineHigh(klines, end.Index+1))
-			sl = minf(minf(start.Low, klineLow(klines, start.Index-1)), klineLow(klines, start.Index+1))
+			eh = max(max(klineHigh(klines, end.Index-1), end.High), klineHigh(klines, end.Index+1))
+			sl = min(min(start.Low, klineLow(klines, start.Index-1)), klineLow(klines, start.Index+1))
 		default:
-			eh = maxf(klineHigh(klines, end.Index-1), end.High)
-			sl = minf(start.Low, klineLow(klines, start.Index+1))
+			eh = max(klineHigh(klines, end.Index-1), end.High)
+			sl = min(start.Low, klineLow(klines, start.Index+1))
 		}
 		if method == "totally" {
 			return start.Low > eh
@@ -431,16 +481,16 @@ func fxValid(klines []types.Kline, start, end types.Fractal, method string) bool
 		var el, sh float64
 		switch method {
 		case "half":
-			el = minf(klineLow(klines, end.Index-1), end.Low)
-			sh = maxf(start.High, klineHigh(klines, start.Index+1))
+			el = min(klineLow(klines, end.Index-1), end.Low)
+			sh = max(start.High, klineHigh(klines, start.Index+1))
 		case "loss":
 			el, sh = end.Low, start.High
 		case "strict", "totally":
-			el = minf(minf(klineLow(klines, end.Index-1), end.Low), klineLow(klines, end.Index+1))
-			sh = maxf(maxf(start.High, klineHigh(klines, start.Index-1)), klineHigh(klines, start.Index+1))
+			el = min(min(klineLow(klines, end.Index-1), end.Low), klineLow(klines, end.Index+1))
+			sh = max(max(start.High, klineHigh(klines, start.Index-1)), klineHigh(klines, start.Index+1))
 		default:
-			el = minf(klineLow(klines, end.Index-1), end.Low)
-			sh = maxf(start.High, klineHigh(klines, start.Index+1))
+			el = min(klineLow(klines, end.Index-1), end.Low)
+			sh = max(start.High, klineHigh(klines, start.Index+1))
 		}
 		if method == "totally" {
 			return start.High < el
@@ -476,14 +526,14 @@ func klineHigh(k []types.Kline, i int) float64 {
 	if i >= 0 && i < len(k) {
 		return k[i].High
 	}
-	return 0
+	return math.Inf(-1)
 }
 
 func klineLow(k []types.Kline, i int) float64 {
 	if i >= 0 && i < len(k) {
 		return k[i].Low
 	}
-	return 1e18
+	return math.Inf(1)
 }
 
 // ── 辅助 ──
@@ -509,23 +559,23 @@ func biDir(bis []types.MergedBi) Direction {
 
 func mergePair(a, b types.Bi, dir Direction) types.Bi {
 	m := a
-	m.EndIndex = maxInt(a.EndIndex, b.EndIndex)
+	m.EndIndex = max(a.EndIndex, b.EndIndex)
 	m.EndPrice = b.EndPrice
 	m.KLineCount = m.EndIndex - m.StartIndex + 1
 	switch dir {
 	case types.DirUp:
-		m.High = maxf(a.High, b.High)
-		m.Low = maxf(a.Low, b.Low)
+		m.High = max(a.High, b.High)
+		m.Low = max(a.Low, b.Low)
 	case types.DirDown:
-		m.High = minf(a.High, b.High)
-		m.Low = minf(a.Low, b.Low)
+		m.High = min(a.High, b.High)
+		m.Low = min(a.Low, b.Low)
 	default:
 		if a.Direction == types.DirUp {
-			m.High = maxf(a.High, b.High)
-			m.Low = maxf(a.Low, b.Low)
+			m.High = max(a.High, b.High)
+			m.Low = max(a.Low, b.Low)
 		} else {
-			m.High = minf(a.High, b.High)
-			m.Low = minf(a.Low, b.Low)
+			m.High = min(a.High, b.High)
+			m.Low = min(a.Low, b.Low)
 		}
 	}
 	m.Length = m.EndPrice - m.StartPrice
@@ -536,27 +586,6 @@ func mergePair(a, b types.Bi, dir Direction) types.Bi {
 		m.Slope = m.Length / float64(m.KLineCount)
 	}
 	return m
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func maxf(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func minf(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // BuildVirtualBi 从最后一笔的终点出发，在尾部 K 线中寻找反向极端价格，构造独立虚笔。

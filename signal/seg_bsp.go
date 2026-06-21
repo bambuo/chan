@@ -60,7 +60,7 @@ func DetectSegSignals(segs []types.Segment, cfg types.Config) *SegSignalsCtx {
 
 	// 步骤 6：检测线段级买卖点（偏差由上层通过 ctx.Deviations 传入，
 	// 见 analysis.go DetectSegSignals 中 segDevs 的存储和重新检测）
-	ctx.Signals = DetectSignals(curPivots, ctx.Merged, ctx.Segments, ctx.Deviations, segCfg)
+	ctx.Signals = DetectSignals(curPivots, ctx.Merged, ctx.Segments, ctx.Deviations, segCfg, nil)
 
 	return ctx
 }
@@ -189,18 +189,18 @@ func segMergePair(a, b types.Bi, dir types.Direction) types.Bi {
 	m.KLineCount = m.EndIndex - m.StartIndex + 1
 	switch dir {
 	case types.DirUp:
-		m.High = maxF(a.High, b.High)
-		m.Low = maxF(a.Low, b.Low)
+		m.High = max(a.High, b.High)
+		m.Low = max(a.Low, b.Low)
 	case types.DirDown:
-		m.High = minF(a.High, b.High)
-		m.Low = minF(a.Low, b.Low)
+		m.High = min(a.High, b.High)
+		m.Low = min(a.Low, b.Low)
 	default:
 		if a.IsUp() {
-			m.High = maxF(a.High, b.High)
-			m.Low = maxF(a.Low, b.Low)
+			m.High = max(a.High, b.High)
+			m.Low = max(a.Low, b.Low)
 		} else {
-			m.High = minF(a.High, b.High)
-			m.Low = minF(a.Low, b.Low)
+			m.High = min(a.High, b.High)
+			m.Low = min(a.Low, b.Low)
 		}
 	}
 	m.Length = m.EndPrice - m.StartPrice
@@ -211,20 +211,6 @@ func segMergePair(a, b types.Bi, dir types.Direction) types.Bi {
 		m.Slope = m.Length / float64(m.KLineCount)
 	}
 	return m
-}
-
-func maxF(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func minF(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // SegBspConfig 从基础配置构造线段级 BSP 配置。

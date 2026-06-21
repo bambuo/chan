@@ -1,6 +1,10 @@
 package trend
 
-import "github.com/bambuo/chan/types"
+import (
+	"math"
+
+	"github.com/bambuo/chan/types"
+)
 
 // ClassifyTrends 从中枢列表分析走势类型。
 func ClassifyTrends(pivots []types.Pivot) []types.Trend {
@@ -22,14 +26,24 @@ func ClassifyTrends(pivots []types.Pivot) []types.Trend {
 }
 
 // UpdateTrendsWithDeviations 用背驰检测结果更新走势完成状态。
+// 优先使用 TrendIndex 精准匹配（DetectTrendDeviations 已设置），
+// 回退到 SegmentAfter 指针匹配（兼容旧调用路径）。
 func UpdateTrendsWithDeviations(trends []types.Trend, deviations []types.Deviation) {
-	for i := range trends {
-		for _, dev := range deviations {
-			if dev.SegmentAfter != nil &&
-				dev.SegmentAfter.EndIndex >= trends[i].StartIndex &&
-				dev.SegmentAfter.EndIndex <= trends[i].EndIndex {
-				markComplete(&trends[i], &dev)
-				break
+	for i := range deviations {
+		dev := &deviations[i]
+		// 精准匹配：TrendIndex 指向产生该背驰的走势（仅趋势背驰有效，-1 表示未关联）
+		if dev.TrendIndex >= 0 && dev.TrendIndex < len(trends) {
+			markComplete(&trends[dev.TrendIndex], dev)
+			continue
+		}
+		// 回退匹配：SegmentAfter 指针
+		if dev.SegmentAfter != nil {
+			for j := range trends {
+				if dev.SegmentAfter.EndIndex >= trends[j].StartIndex &&
+					dev.SegmentAfter.EndIndex <= trends[j].EndIndex {
+					markComplete(&trends[j], dev)
+					break
+				}
 			}
 		}
 	}
@@ -45,6 +59,10 @@ func classifyFrom(pivots []types.Pivot, i int) (*types.Trend, int) {
 			StartIndex: p.StartIndex, EndIndex: p.EndIndex}, i + 1
 	}
 	p0, p1 := pivots[i], pivots[i+1]
+	if p1.Direction != p0.Direction {
+		return &types.Trend{Type: types.RangeOnly, Pivots: []types.Pivot{p0},
+			StartIndex: p0.StartIndex, EndIndex: p0.EndIndex}, i + 1
+	}
 	if p1.DD > p0.GG {
 		t := buildTrend(types.TrendUp, pivots, i)
 		return t, i + len(t.Pivots)
@@ -63,6 +81,9 @@ func buildTrend(tp types.TrendType, pivots []types.Pivot, start int) *types.Tren
 	for i := start + 1; i < len(pivots); i++ {
 		prev := t.Pivots[len(t.Pivots)-1]
 		curr := pivots[i]
+		if curr.Direction != prev.Direction {
+			break
+		}
 		match := (tp == types.TrendUp && curr.DD > prev.GG) ||
 			(tp == types.TrendDown && curr.GG < prev.DD)
 		if !match {
@@ -126,8 +147,8 @@ func CalcTrendMetrics(trends []types.Trend, klines []types.Kline, metrics []int)
 			}
 			sum := 0.0
 			cnt := 0
-			mx := -1e18
-			mn := 1e18
+			mx := math.Inf(-1)
+			mn := math.Inf(1)
 			for j := bgn; j <= end; j++ {
 				sum += closes[j]
 				if highs[j] > mx {
@@ -169,18 +190,4 @@ func klineLows(k []types.Kline) []float64 {
 		r[i] = c.Low
 	}
 	return r
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

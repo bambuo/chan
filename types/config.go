@@ -121,14 +121,14 @@ func DefaultConfig() Config {
 		UpdateWindowSize:  300,
 
 		BiAlgo:         "normal",
-		BiStrict:       true,
-		BiFxCheck:      "strict",
+		BiStrict:       false,
+		BiFxCheck:      "loss",
 		GapAsKl:        true,
-		BiEndIsPeak:    true,
+		BiEndIsPeak:    false,
 		BiAllowSubPeak: true,
 
-		SegAlgo:       "chan",
-		LeftSegMethod: "peak",
+		SegAlgo:       "def",
+		LeftSegMethod: "all",
 
 		ZsCombine:     true,
 		ZsCombineMode: "zs",

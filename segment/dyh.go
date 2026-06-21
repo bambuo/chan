@@ -6,5 +6,5 @@ import "github.com/bambuo/chan/types"
 //
 // 当前实现与 buildDef 共享 simpleSegment 逻辑，未来可按需差异化。
 func buildDyh(bis []types.MergedBi) []types.Segment {
-	return simpleSegment(bis, "dyh")
+	return simpleSegment(bis)
 }

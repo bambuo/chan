@@ -297,7 +297,7 @@ func (b *builder) addFree(biIdx int, sure bool) {
 	}
 	b.freeItemLst = append(b.freeItemLst, biIdx)
 	zs := b.tryConstruct(b.freeItemLst, sure)
-	if zs != nil && zs.BeginBiIdx > 0 {
+	if zs != nil {
 		b.zsLst = append(b.zsLst, *zs)
 		b.freeItemLst = b.freeItemLst[:0]
 		b.tryCombine()
@@ -474,7 +474,11 @@ func doCombine(zs1, zs2 *types.Pivot) {
 	}
 	zs1.EndIndex = zs2.EndIndex
 	zs1.EndBiIdx = zs2.EndBiIdx
-	zs1.BiOut = zs2.BiOut
+	// 合并发生在 UpdateZSInSeg 回填之前，此时 zs2.BiOut 通常为 nil。
+	// 仅在 zs2 已有 BiOut 时才覆盖，避免丢失 zs1 已有的出口笔信息。
+	if zs2.BiOut != nil {
+		zs1.BiOut = zs2.BiOut
+	}
 	zs1.OverlapCount += zs2.OverlapCount
 }
 
@@ -490,7 +494,8 @@ func (b *builder) hasSureSegment() bool {
 }
 
 func (b *builder) segNeedCal(seg types.Segment) bool {
-	// 始终需要计算（简化处理）
+	// 工程简化：所有线段均参与中枢计算。
+	// chan.py 原版会根据线段 IsSure/方向进一步过滤，此处保留接口以便未来扩展。
 	return true
 }
 

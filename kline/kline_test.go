@@ -44,6 +44,25 @@ func TestAggregateKlines_Basic(t *testing.T) {
 	}
 }
 
+func TestMergeKlines_DirectionUsesMergedResult(t *testing.T) {
+	// 验证方向基于合并结果序列而非原始序列（对齐 chan.py 合并后 KLC 比较）。
+	// k0+k1 向上合并为 {H:10, L:5}，方向保持 DirUp；
+	// k2={H:9, L:5.5} 被包含，向上合并为 {H:10, L:5.5}。
+	klines := []types.Kline{
+		{High: 10, Low: 5, Open: 8, Close: 7},
+		{High: 10, Low: 4, Open: 7, Close: 5},
+		{High: 9, Low: 5.5, Open: 6, Close: 6},
+	}
+
+	merged := MergeKlines(klines)
+	if len(merged) != 1 {
+		t.Fatalf("expected all klines to merge into 1 item, got %d", len(merged))
+	}
+	if merged[0].High != 10 || merged[0].Low != 5.5 {
+		t.Fatalf("merged range = [%.2f, %.2f], want [10.00, 5.50]", merged[0].High, merged[0].Low)
+	}
+}
+
 func TestAggregateKlines_MultiBucket(t *testing.T) {
 	base := time.Date(2026, 1, 1, 9, 30, 0, 0, time.UTC)
 	src := make([]types.Kline, 12)

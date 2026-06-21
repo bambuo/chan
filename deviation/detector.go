@@ -7,6 +7,11 @@ import (
 	"github.com/bambuo/chan/types"
 )
 
+// isSentinel 判断背驰率是否为哨兵值（关闭背驰率过滤）。
+func isSentinel(rate float64) bool {
+	return math.IsInf(rate, 1) || rate > types.DivergenceSentinelThreshold
+}
+
 // metricForSide 根据偏差方向选择买/卖侧的力度算法。
 // 向下笔→买侧，向上笔→卖侧。
 func metricForSide(bi *types.Bi, config types.Config) force.MetricType {
@@ -29,13 +34,40 @@ func metricForSide(bi *types.Bi, config types.Config) force.MetricType {
 	return force.ParseMetric(algo)
 }
 
+// isDivergence 判定力度是否构成背驰。
+// 纯函数：sentinel 关闭倍率过滤，但仍要求后段力度小于前段力度；否则要求 outM <= rate*inM 且 inM>0。
+// 对齐 Python ZS.py:171-174 的 divergence_rate > 100 “保送”逻辑（sentinel 关闭比率过滤）。
+func isDivergence(inM, outM, rate float64) bool {
+	if inM <= types.ForceEpsilon {
+		return false
+	}
+	if isSentinel(rate) {
+		return outM < inM
+	}
+	return outM <= rate*inM
+}
+
+// calcForce 根据配置选择力度计算的底层算法。
+// 当 metric 为 Rsi 时使用 Config.RsiCycle 作为周期，否则回退到 CalcMetric。
+// 纯函数，不修改任何状态。
+func calcForce(bi types.Bi, metric force.MetricType, isReverse bool,
+	macdHist, macdDif, volumes, turnovers, closes []float64, cfg types.Config) float64 {
+	if metric == force.Rsi {
+		period := cfg.RsiCycle
+		if period <= 0 {
+			period = 14 // 兜底标准周期
+		}
+		return force.CalcRSIMetric(bi, period, closes)
+	}
+	return force.CalcMetric(bi, metric, isReverse, macdHist, macdDif, volumes, turnovers, closes)
+}
+
 // DetectDeviations 基于笔级中枢检测背驰。
 func DetectDeviations(pivots []types.Pivot, macdHist, macdDif, volumes, turnovers, closes []float64, config types.Config) []types.Deviation {
 	if len(pivots) == 0 {
 		return nil
 	}
 	rate := config.BspDivergenceRate
-	sentinel := math.IsInf(rate, 1) || rate > 100
 	var devs []types.Deviation
 	for i := range pivots {
 		zs := &pivots[i]
@@ -47,23 +79,19 @@ func DetectDeviations(pivots []types.Pivot, macdHist, macdDif, volumes, turnover
 		}
 		// 按方向选择买/卖算法
 		metric := metricForSide(zs.BiOut, config)
-		inM := force.CalcMetric(*zs.BiIn, metric, false, macdHist, macdDif, volumes, turnovers, closes)
-		outM := force.CalcMetric(*zs.BiOut, metric, true, macdHist, macdDif, volumes, turnovers, closes)
-		diver := false
-		if sentinel {
-			diver = true
-		} else if inM > 1e-12 {
-			diver = outM <= rate*inM
-		}
-		if !diver {
+		inM := calcForce(*zs.BiIn, metric, false, macdHist, macdDif, volumes, turnovers, closes, config)
+		outM := calcForce(*zs.BiOut, metric, true, macdHist, macdDif, volumes, turnovers, closes, config)
+		if !isDivergence(inM, outM, rate) {
 			continue
 		}
 		devs = append(devs, types.Deviation{
 			Type: "bi_pivot", Level: types.BiDeviation, Direction: zs.BiOut.Direction,
 			SegBeforeIdx: i, SegAfterIdx: i, PriceHigh: zs.BiOut.EndPrice,
 			ForceBefore: inM, ForceAfter: outM,
-			MACDAreaBefore: fullArea(*zs.BiIn, macdHist), MACDAreaAfter: fullArea(*zs.BiOut, macdHist),
-			MACDDiffBefore: diffRange(*zs.BiIn, macdHist), MACDDiffAfter: diffRange(*zs.BiOut, macdHist),
+			MACDAreaBefore: force.CalcMetric(*zs.BiIn, force.FullArea, false, macdHist, macdDif, volumes, turnovers, closes),
+			MACDAreaAfter:  force.CalcMetric(*zs.BiOut, force.FullArea, true, macdHist, macdDif, volumes, turnovers, closes),
+			MACDDiffBefore: force.CalcMetric(*zs.BiIn, force.Diff, false, macdHist, macdDif, volumes, turnovers, closes),
+			MACDDiffAfter:  force.CalcMetric(*zs.BiOut, force.Diff, true, macdHist, macdDif, volumes, turnovers, closes),
 		})
 	}
 	return devs
@@ -76,9 +104,8 @@ func DetectTrendDeviations(pivots []types.Pivot, trends []types.Trend,
 		return nil
 	}
 	rate := config.BspDivergenceRate
-	sentinel := math.IsInf(rate, 1) || rate > 100
 	var devs []types.Deviation
-	for _, trend := range trends {
+	for ti, trend := range trends {
 		tp := trend.Pivots
 		if len(tp) < 2 {
 			continue
@@ -109,22 +136,19 @@ func DetectTrendDeviations(pivots []types.Pivot, trends []types.Trend,
 		}
 		// 按方向选择买/卖算法
 		metric := metricForSide(cBi, config)
-		aM := force.CalcMetric(*aBi, metric, false, macdHist, macdDif, volumes, turnovers, closes)
-		cM := force.CalcMetric(*cBi, metric, true, macdHist, macdDif, volumes, turnovers, closes)
-		diver := false
-		if sentinel {
-			diver = true
-		} else if aM > 1e-12 {
-			diver = cM <= rate*aM
-		}
-		if !diver {
+		aM := calcForce(*aBi, metric, false, macdHist, macdDif, volumes, turnovers, closes, config)
+		cM := calcForce(*cBi, metric, true, macdHist, macdDif, volumes, turnovers, closes, config)
+		if !isDivergence(aM, cM, rate) {
 			continue
 		}
 		devs = append(devs, types.Deviation{
 			Type: "bi_trend", Level: types.TrendDeviation, Direction: cBi.Direction,
-			PriceHigh: cBi.EndPrice, ForceBefore: aM, ForceAfter: cM,
-			MACDAreaBefore: fullArea(*aBi, macdHist), MACDAreaAfter: fullArea(*cBi, macdHist),
-			MACDDiffBefore: diffRange(*aBi, macdHist), MACDDiffAfter: diffRange(*cBi, macdHist),
+			TrendIndex: ti,
+			PriceHigh:  cBi.EndPrice, ForceBefore: aM, ForceAfter: cM,
+			MACDAreaBefore: force.CalcMetric(*aBi, force.FullArea, false, macdHist, macdDif, volumes, turnovers, closes),
+			MACDAreaAfter:  force.CalcMetric(*cBi, force.FullArea, true, macdHist, macdDif, volumes, turnovers, closes),
+			MACDDiffBefore: force.CalcMetric(*aBi, force.Diff, false, macdHist, macdDif, volumes, turnovers, closes),
+			MACDDiffAfter:  force.CalcMetric(*cBi, force.Diff, true, macdHist, macdDif, volumes, turnovers, closes),
 		})
 	}
 	return devs
@@ -138,7 +162,6 @@ func DetectSegmentDeviations(segPivots []types.Pivot, segs []types.MergedBi,
 		return nil
 	}
 	rate := config.BspDivergenceRate
-	sentinel := math.IsInf(rate, 1) || rate > 100
 	var devs []types.Deviation
 	for i := range segPivots {
 		zs := &segPivots[i]
@@ -149,23 +172,19 @@ func DetectSegmentDeviations(segPivots []types.Pivot, segs []types.MergedBi,
 			continue
 		}
 		metric := metricForSide(zs.BiOut, config)
-		inM := force.CalcMetric(*zs.BiIn, metric, false, macdHist, macdDif, volumes, turnovers, closes)
-		outM := force.CalcMetric(*zs.BiOut, metric, true, macdHist, macdDif, volumes, turnovers, closes)
-		diver := false
-		if sentinel {
-			diver = true
-		} else if inM > 1e-12 {
-			diver = outM <= rate*inM
-		}
-		if !diver {
+		inM := calcForce(*zs.BiIn, metric, false, macdHist, macdDif, volumes, turnovers, closes, config)
+		outM := calcForce(*zs.BiOut, metric, true, macdHist, macdDif, volumes, turnovers, closes, config)
+		if !isDivergence(inM, outM, rate) {
 			continue
 		}
 		devs = append(devs, types.Deviation{
 			Type: "seg_pivot", Level: types.SegmentDeviation, Direction: zs.BiOut.Direction,
 			SegBeforeIdx: i, SegAfterIdx: i, PriceHigh: zs.BiOut.EndPrice,
 			ForceBefore: inM, ForceAfter: outM,
-			MACDAreaBefore: fullArea(*zs.BiIn, macdHist), MACDAreaAfter: fullArea(*zs.BiOut, macdHist),
-			MACDDiffBefore: diffRange(*zs.BiIn, macdHist), MACDDiffAfter: diffRange(*zs.BiOut, macdHist),
+			MACDAreaBefore: force.CalcMetric(*zs.BiIn, force.FullArea, false, macdHist, macdDif, volumes, turnovers, closes),
+			MACDAreaAfter:  force.CalcMetric(*zs.BiOut, force.FullArea, true, macdHist, macdDif, volumes, turnovers, closes),
+			MACDDiffBefore: force.CalcMetric(*zs.BiIn, force.Diff, false, macdHist, macdDif, volumes, turnovers, closes),
+			MACDDiffAfter:  force.CalcMetric(*zs.BiOut, force.Diff, true, macdHist, macdDif, volumes, turnovers, closes),
 		})
 	}
 	return devs
@@ -179,40 +198,6 @@ func endBiBreak(out *types.Bi, zg, zd float64) bool {
 		return out.ZSLow() < zd
 	}
 	return out.IsUp() && out.ZSHigh() > zg
-}
-
-func fullArea(bi types.Bi, hist []float64) float64 {
-	s := 1e-7
-	for i := bi.StartIndex; i <= bi.EndIndex && i < len(hist); i++ {
-		if i < 0 {
-			continue
-		}
-		v := hist[i]
-		if (bi.Direction == types.DirDown && v < 0) || (bi.Direction == types.DirUp && v > 0) {
-			s += math.Abs(v)
-		}
-	}
-	return s
-}
-
-func diffRange(bi types.Bi, hist []float64) float64 {
-	mx, mn := math.Inf(-1), math.Inf(1)
-	for i := bi.StartIndex; i <= bi.EndIndex && i < len(hist); i++ {
-		if i < 0 {
-			continue
-		}
-		v := hist[i]
-		if v > mx {
-			mx = v
-		}
-		if v < mn {
-			mn = v
-		}
-	}
-	if math.IsInf(mx, -1) || math.IsInf(mn, 1) {
-		return 0
-	}
-	return mx - mn
 }
 
 func trendDir(t types.TrendType) types.Direction {

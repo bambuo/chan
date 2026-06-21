@@ -132,6 +132,9 @@ type Analysis struct {
 
 	// 逐 K 线增量模式 buffer
 	buffer []types.Kline
+
+	// 多级别链分析结果（由 BuildMultiLevelChain 设置）
+	multiLevelResult *multi.MultiLevelResult
 }
 
 // NewAnalysis 创建分析实例。
@@ -243,7 +246,7 @@ func (a *Analysis) DetectDeviations() *Analysis {
 
 // DetectSignals 买卖点。
 func (a *Analysis) DetectSignals() *Analysis {
-	a.Signals = signal.DetectSignals(a.Pivots.Items, a.Bis.Merged, a.Segments.Items, a.Deviations, a.Config)
+	a.Signals = signal.DetectSignals(a.Pivots.Items, a.Bis.Merged, a.Segments.Items, a.Deviations, a.Config, a.macdHist)
 	return a
 }
 
@@ -262,7 +265,7 @@ func (a *Analysis) DetectSegSignals() *Analysis {
 			segCfg := signal.SegBspConfig(a.Config)
 			a.SegSignals.Signals = signal.DetectSignals(
 				a.SegSignals.Pivots, a.SegSignals.Merged,
-				a.SegSignals.Segments, segDevs, segCfg)
+				a.SegSignals.Segments, segDevs, segCfg, a.macdHist)
 		}
 	}
 	return a
@@ -272,10 +275,14 @@ func (a *Analysis) DetectSegSignals() *Analysis {
 func (a *Analysis) ScoreSignals() *Analysis {
 	liq := liquidityOf(a.Klines.Items)
 	weights := a.Config.ScoreWeights
+	levelCount := 1
+	if a.multiLevelResult != nil {
+		levelCount = a.multiLevelResult.LevelCount()
+	}
 	for i := range a.Signals {
 		s, _ := scoring.ScoreSignal(&scoring.ScoringContext{
 			Signal: a.Signals[i], Deviations: a.Deviations, Pivots: a.Pivots.Items,
-			MultiLevelCount: 1, LiquidityData: liq, ClosePrices: a.closes,
+			MultiLevelCount: levelCount, LiquidityData: liq, ClosePrices: a.closes,
 			Weights: &weights,
 		})
 		a.Signals[i].Strength = s
@@ -290,10 +297,13 @@ func (a *Analysis) Run() *types.Result {
 		DetectSignals().ScoreSignals().DetectSegSignals().Result()
 }
 
-// BuildMultiLevel 在当前分析结果基础上，使用高级别 K 线递归构筑更高级别结构。
-// 基础级别的线段将被视为高级别的「笔」。
-func (a *Analysis) BuildMultiLevel(higherKlines []types.Kline) *multi.MultiLevelResult {
-	return multi.BuildMultiLevel(a.Result(), higherKlines, a.Config)
+// BuildMultiLevelChain 从最低级别到最高级别递归构建多级别缠论结构。
+// levels 必须按时间周期从低到高排列，如 [{Interval:"1m", Klines:...}, {Interval:"5m", ...}]。
+// 最低级别使用当前 Analysis 的 K 线数据，高级别使用传入的 levels 依次递归。
+func (a *Analysis) BuildMultiLevelChain(levels []multi.LevelInput) *multi.MultiLevelResult {
+	result := multi.BuildMultiLevelChain(levels, a.Config)
+	a.multiLevelResult = result
+	return result
 }
 
 // Step 逐根推送 K 线，执行增量分析。

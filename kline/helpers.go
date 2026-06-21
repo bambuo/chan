@@ -10,43 +10,51 @@ const (
 	containDown
 )
 
+// testContainment 判定 last 与 curr 的包含关系。
+// allowTopEqual: 1=顶相等（High 相等）不合并、-1=底相等（Low 相等）不合并、0=标准模式。
+//
+// 返回值：
+//   - containCombine: curr 被 last 包含或包含 last，应执行合并
+//   - containUp: curr 在 last 上方（无包含），应保留 curr
+//   - containDown: curr 在 last 下方（无包含），应保留 curr
 func testContainment(last, curr types.Kline, allowTopEqual int) containResult {
+	// 先处理 allowTopEqual 相等边界，避免被后续 >= / <= 分支吞掉。
+	// 顶相等（High 相等且 last.Low 严格高于 curr.Low）：allowTopEqual=1 时不合并。
+	if allowTopEqual == 1 && last.High == curr.High && last.Low > curr.Low {
+		return containDown
+	}
+	// 底相等（Low 相等且 last.High 严格低于 curr.High）：allowTopEqual=-1 时不合并。
+	if allowTopEqual == -1 && last.Low == curr.Low && last.High < curr.High {
+		return containUp
+	}
+
+	// last 包含 curr（last 区间覆盖 curr）
 	if last.High >= curr.High && last.Low <= curr.Low {
 		return containCombine
 	}
+	// curr 包含 last（curr 区间覆盖 last）
 	if last.High <= curr.High && last.Low >= curr.Low {
-		if allowTopEqual == 1 && last.High == curr.High && last.Low > curr.Low {
-			return containDown
-		}
-		if allowTopEqual == -1 && last.Low == curr.Low && last.High < curr.High {
-			return containUp
-		}
 		return containCombine
 	}
+	// 无包含：curr 完全在 last 上方
 	if last.High < curr.High && last.Low < curr.Low {
 		return containUp
 	}
+	// 无包含：curr 完全在 last 下方
 	if last.High > curr.High && last.Low > curr.Low {
 		return containDown
 	}
 	return containCombine
 }
 
-func direction(klines []types.Kline) types.Direction {
-	for i := len(klines) - 1; i >= 1; i-- {
-		prev, curr := klines[i-1], klines[i]
-		if !(prev.High <= curr.High && prev.Low >= curr.Low) &&
-			!(curr.High <= prev.High && curr.Low >= prev.Low) {
-			if curr.High >= prev.High {
-				return types.DirUp
-			}
-			if curr.Low <= prev.Low {
-				return types.DirDown
-			}
-		}
+func updateDirectionFromRaw(prev, curr types.Kline, fallback types.Direction) types.Direction {
+	if curr.High > prev.High {
+		return types.DirUp
 	}
-	// 对齐 Python：无法确定方向时默认为 UP（Python 中第一个 CKLine 默认方向为 UP）
-	return types.DirUp
+	if curr.Low < prev.Low {
+		return types.DirDown
+	}
+	return fallback
 }
 
 func mergePair(a, b types.Kline, dir types.Direction) types.Kline {
@@ -55,17 +63,17 @@ func mergePair(a, b types.Kline, dir types.Direction) types.Kline {
 		t = b.Time
 	}
 	m := mergeMeta(a, b, t)
-	switch dir {
-	case types.DirUp:
-		m.High = max(a.High, b.High)
-		m.Low = max(a.Low, b.Low)
-	case types.DirDown:
+	// 缠论包含处理取极值规则（对齐 docs/K线包含处理算法.md）：
+	//   - 方向向上（处于上升段）：High 取较大、Low 取较大（保留上沿）
+	//   - 方向向下（处于下降段）：High 取较小、Low 取较小（保留下沿）
+	// 当方向无法判定（DirNone）时，按初始上升方向处理。
+	if dir == types.DirDown {
 		m.High = min(a.High, b.High)
 		m.Low = min(a.Low, b.Low)
-	default:
-		m.High = a.High
-		m.Low = a.Low
-		m.Close = a.Close
+	} else {
+		// DirUp 与 DirNone 均按上升方向取极值，避免丢弃 b 的价格信息。
+		m.High = max(a.High, b.High)
+		m.Low = max(a.Low, b.Low)
 	}
 	return m
 }
@@ -82,20 +90,6 @@ func mergeMeta(a, b types.Kline, t types.DateTime) types.Kline {
 
 func pick(a, b string) string {
 	if a != "" {
-		return a
-	}
-	return b
-}
-
-func max(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b float64) float64 {
-	if a < b {
 		return a
 	}
 	return b

@@ -1,6 +1,8 @@
 package segment
 
 import (
+	"math"
+
 	"github.com/bambuo/chan/types"
 )
 
@@ -111,8 +113,8 @@ func tryBuildSeg(bis []types.MergedBi, start int) (*types.Segment, int) {
 // buildSegFromRange 从笔范围构造 Segment 对象。
 func buildSegFromRange(bis []types.MergedBi, startBiIdx, endBiIdx int, dir types.Direction, isSure bool, fx *eigenFX) types.Segment {
 	biList := make([]types.MergedBi, 0, endBiIdx-startBiIdx+1)
-	top := -1e18
-	bottom := 1e18
+	top := math.Inf(-1)
+	bottom := math.Inf(1)
 	for i := startBiIdx; i <= endBiIdx && i < len(bis); i++ {
 		biList = append(biList, bis[i])
 		if bis[i].High > top {

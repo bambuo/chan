@@ -185,6 +185,7 @@ type Deviation struct {
 	SegmentAfter   *Segment       `json:"-"`
 	SegBeforeIdx   int            `json:"segBefore,omitempty"`
 	SegAfterIdx    int            `json:"segAfter,omitempty"`
+	TrendIndex     int            `json:"trendIndex,omitempty"` // 产生该背驰的走势索引（仅趋势背驰有效，-1 表示未关联）
 	PriceHigh      float64        `json:"priceHigh"`
 	ForceBefore    float64        `json:"forceBefore"`
 	ForceAfter     float64        `json:"forceAfter"`

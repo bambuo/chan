@@ -8,14 +8,14 @@ import "github.com/bambuo/chan/types"
 // 为线段起点，同向延伸至反向笔出现为止。
 //
 // 未来如需差异化，可在此函数内添加 algo 参数分支。
-func simpleSegment(bis []types.MergedBi, name string) []types.Segment {
+func simpleSegment(bis []types.MergedBi) []types.Segment {
 	if len(bis) < 3 {
 		return nil
 	}
 	var segs []types.Segment
 	i := 0
 	for i < len(bis) {
-		s, n := trySimpleSegment(bis, i, name)
+		s, n := trySimpleSegment(bis, i)
 		if s == nil {
 			i = n
 			continue
@@ -26,7 +26,7 @@ func simpleSegment(bis []types.MergedBi, name string) []types.Segment {
 	return segs
 }
 
-func trySimpleSegment(bis []types.MergedBi, start int, name string) (*types.Segment, int) {
+func trySimpleSegment(bis []types.MergedBi, start int) (*types.Segment, int) {
 	if start+2 >= len(bis) {
 		return nil, len(bis)
 	}

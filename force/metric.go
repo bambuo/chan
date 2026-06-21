@@ -7,7 +7,8 @@ import (
 )
 
 // epsilon 防零基值，用于避免除零和 log(0) 等数值问题。
-const epsilon = 1e-7
+// 统一引用 types.ForceEpsilon，避免跨包 epsilon 不一致导致假背驰信号。
+const epsilon = types.ForceEpsilon
 
 // MetricType 枚举力度指标类型。
 type MetricType int
@@ -67,7 +68,7 @@ func CalcMetric(bi types.Bi, metric MetricType, isReverse bool,
 	case FullArea:
 		return calcFullArea(bi, macdHist)
 	case Diff:
-		return calcDiffRange(bi, macdHist)
+		return calcDiffRange(bi, macdDif)
 	case Slope:
 		return calcSlope(bi)
 	case Amp:
@@ -81,10 +82,21 @@ func CalcMetric(bi types.Bi, metric MetricType, isReverse bool,
 	case VolumeAvg:
 		return calcTradeMetric(bi, volumes, true)
 	case Rsi:
-		return calcRsiMetric(bi, closes)
+		return calcRsiMetric(bi, defaultRSIPeriod, closes)
 	default:
 		return calcMACDPeak(bi, macdHist)
 	}
+}
+
+// defaultRSIPeriod 为 CalcMetric 中 RSI 指标的默认周期。
+// 与 kline.CalcIndicators 的 Config.RsiCycle 默认值（9）独立，
+// 采用标准周期 14 以保证背驰力度判定的可比性。
+const defaultRSIPeriod = 14
+
+// CalcRSIMetric 使用可配置周期的 RSI 计算笔的力度指标。
+// rsiPeriod 指定 Wilder 平滑周期（标准值 14）。
+func CalcRSIMetric(bi types.Bi, rsiPeriod int, closes []float64) float64 {
+	return calcRsiMetric(bi, rsiPeriod, closes)
 }
 
 func calcHalfArea(bi types.Bi, isReverse bool, macdHist []float64) float64 {
@@ -92,7 +104,24 @@ func calcHalfArea(bi types.Bi, isReverse bool, macdHist []float64) float64 {
 	if !isReverse {
 		startKlu := bi.StartIndex
 		peakMacd := safeIndex(macdHist, startKlu)
-		for i := startKlu; i <= bi.EndIndex && i < len(macdHist); i++ {
+		// 当起点 MACD=0（零轴交叉），向前搜索第一个非零值
+		startFrom := startKlu
+		if peakMacd == 0 {
+			for i := startKlu + 1; i <= bi.EndIndex && i < len(macdHist); i++ {
+				if i < 0 {
+					continue
+				}
+				if macdHist[i] != 0 {
+					peakMacd = macdHist[i]
+					startFrom = i
+					break
+				}
+			}
+			if peakMacd == 0 {
+				return s // 笔内全为零
+			}
+		}
+		for i := startFrom; i <= bi.EndIndex && i < len(macdHist); i++ {
 			if i < 0 {
 				continue
 			}
@@ -106,7 +135,24 @@ func calcHalfArea(bi types.Bi, isReverse bool, macdHist []float64) float64 {
 	} else {
 		endKlu := bi.EndIndex
 		peakMacd := safeIndex(macdHist, endKlu)
-		for i := endKlu; i >= bi.StartIndex && i >= 0; i-- {
+		// 当终点 MACD=0（零轴交叉），向后搜索第一个非零值
+		startFrom := endKlu
+		if peakMacd == 0 {
+			for i := endKlu - 1; i >= bi.StartIndex && i >= 0; i-- {
+				if i >= len(macdHist) {
+					continue
+				}
+				if macdHist[i] != 0 {
+					peakMacd = macdHist[i]
+					startFrom = i
+					break
+				}
+			}
+			if peakMacd == 0 {
+				return s // 笔内全为零
+			}
+		}
+		for i := startFrom; i >= bi.StartIndex && i >= 0; i-- {
 			if i >= len(macdHist) {
 				continue
 			}
@@ -151,14 +197,14 @@ func calcFullArea(bi types.Bi, macdHist []float64) float64 {
 	return s
 }
 
-func calcDiffRange(bi types.Bi, macdHist []float64) float64 {
+func calcDiffRange(bi types.Bi, macdDif []float64) float64 {
 	maxVal := math.Inf(-1)
 	minVal := math.Inf(1)
-	for i := bi.StartIndex; i <= bi.EndIndex && i < len(macdHist); i++ {
+	for i := bi.StartIndex; i <= bi.EndIndex && i < len(macdDif); i++ {
 		if i < 0 {
 			continue
 		}
-		v := macdHist[i]
+		v := macdDif[i]
 		if v > maxVal {
 			maxVal = v
 		}
@@ -221,17 +267,16 @@ func calcTradeMetric(bi types.Bi, data []float64, isAvg bool) float64 {
 	return s
 }
 
-const rsiPeriod = 14 // 标准 RSI 周期
-
-// calcRsiMetric 使用标准 RSI-14 公式计算笔的力度指标。
+// calcRsiMetric 使用 Wilder 平滑 RSI 公式计算笔的力度指标。
 //
 // 对每根 K 线（从 bi.StartIndex 开始）计算 RSI，然后在 bi 范围内：
 //   - 向上笔：取 RSI 最大值（数值越高力度越强）
 //   - 向下笔：取 RSI 最小值的倒数变换（数值越低 → 返回值越大，表示下跌力度越强）
-func calcRsiMetric(bi types.Bi, closes []float64) float64 {
-	if closes == nil || len(closes) < rsiPeriod+1 {
+func calcRsiMetric(bi types.Bi, rsiPeriod int, closes []float64) float64 {
+	if closes == nil || len(closes) < rsiPeriod+1 || rsiPeriod <= 0 {
 		return 0
 	}
+	rp := float64(rsiPeriod)
 
 	// 计算价格变化并初始化平均涨跌
 	var gains, losses []float64
@@ -258,15 +303,15 @@ func calcRsiMetric(bi types.Bi, closes []float64) float64 {
 
 	rsis := make([]float64, len(gains))
 	rsi := 50.0
-	if avgLoss > 1e-12 {
+	if avgLoss > epsilon {
 		rsi = 100.0 - 100.0/(1.0+avgGain/avgLoss)
 	}
 	rsis[rsiPeriod-1] = rsi
 
 	for i := rsiPeriod; i < len(gains); i++ {
-		avgGain = (avgGain*(rsiPeriod-1) + gains[i]) / rsiPeriod
-		avgLoss = (avgLoss*(rsiPeriod-1) + losses[i]) / rsiPeriod
-		if avgLoss > 1e-12 {
+		avgGain = (avgGain*(rp-1) + gains[i]) / rp
+		avgLoss = (avgLoss*(rp-1) + losses[i]) / rp
+		if avgLoss > epsilon {
 			rsi = 100.0 - 100.0/(1.0+avgGain/avgLoss)
 		} else {
 			rsi = 100.0

@@ -2,8 +2,14 @@ package fractal
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/bambuo/chan/types"
+)
+
+const (
+	priceRangeEpsilon = 1e-10
+	gapScoreUnit      = 0.2 // 单侧跳空得分（双侧累加）
 )
 
 // FindFractals 在经包含处理后的 Kline 序列上识别所有客观分型。
@@ -34,6 +40,7 @@ func FindFractals(klines []types.Kline) []types.Fractal {
 }
 
 // FilterForBi 筛选可用于成笔的有效顶底分型。
+// minGap 为两异向分型间最少需要相隔的独立合并 K 线数（对齐 Config.BiMinKLineCount）。
 func FilterForBi(fractals []types.Fractal, minGap int) []types.Fractal {
 	if len(fractals) == 0 {
 		return nil
@@ -55,29 +62,26 @@ func FilterForBi(fractals []types.Fractal, minGap int) []types.Fractal {
 	return r
 }
 
-func idxGap(a, b types.Fractal) int { return (b.Index - 1) - (a.Index + 1) - 1 }
+// idxGap 返回两分型之间的独立合并 K 线数。
+// 对齐 docs/笔.md §5.2 与缠论算法.md §12.4：BiMinKLineCount 表示分型间
+// 最少独立 K 线数（默认 1）。两个相邻分型 a.Index 与 b.Index 之间的独立 K 线
+// 数 = b.Index - a.Index - 1（不含两端分型自身）。
+func idxGap(a, b types.Fractal) int { return b.Index - a.Index - 1 }
 
 func strength(mid, prev, next types.Kline) float64 {
-	body := abs(mid.Close-mid.Open) / (mid.High - mid.Low + 1e-10)
+	body := math.Abs(mid.Close-mid.Open) / (mid.High - mid.Low + priceRangeEpsilon)
 	gap := 0.0
 	if (mid.Low > prev.High) || (mid.High < prev.Low) {
-		gap = 0.2
+		gap += gapScoreUnit
 	}
 	if (next.Low > mid.High) || (next.High < mid.Low) {
-		gap = 0.2
+		gap += gapScoreUnit
 	}
 	s := body + gap
 	if s > 1 {
 		s = 1
 	}
 	return s
-}
-
-func abs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
 
 // ValidateFractals 对分型序列做调试检测，返回警告信息列表。

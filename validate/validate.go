@@ -60,6 +60,9 @@ func Config(cfg types.Config) error {
 	if cfg.BspMaxBs2Rate > 1 {
 		errs = append(errs, "BspMaxBs2Rate must be <= 1")
 	}
+	if cfg.BspMaxBs2sLv != nil && *cfg.BspMaxBs2sLv < 1 {
+		errs = append(errs, "BspMaxBs2sLv must be >= 1 (or nil for unlimited)")
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("%w: %s", ErrInvalidConfig, joinStrings(errs, "; "))

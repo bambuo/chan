@@ -107,10 +107,20 @@ func (e *eigenElement) getPeakIdx() int {
 		}
 	}
 	if peakBiPos >= 0 && peakBiPos < len(e.biIdxs) {
-		// Python 返回 .idx-1（峰前一笔），峰笔本身属于下一段
-		return e.biIdxs[peakBiPos] - 1
+		// Python 返回 .idx-1（峰前一笔），峰笔本身属于下一段。
+		// 保护：峰为首个元素时 biIdxs[0]-1 可能为 -1，clamp 到 0 避免下游越界。
+		peakIdx := e.biIdxs[peakBiPos] - 1
+		if peakIdx < 0 {
+			peakIdx = 0
+		}
+		return peakIdx
 	}
-	return e.biIdxs[0] - 1
+	// 兜底：返回首元素前一索引（同样 clamp）。
+	fallback := e.biIdxs[0] - 1
+	if fallback < 0 {
+		fallback = 0
+	}
+	return fallback
 }
 
 type eigenFXBreakResult int
@@ -130,6 +140,7 @@ type eigenFX struct {
 	lastEvidenceBi    *types.MergedBi
 	lastEvidentBiSure bool
 	gapPending        bool
+	recursing         bool // 在 findRevertFx 递归中时阻止 canBeEnd 二次递归
 }
 
 type Direction = types.Direction
@@ -238,21 +249,26 @@ func (fx *eigenFX) canBeEnd(bis []types.MergedBi, beginIdx int) (shouldEnd, isSu
 		return false, false
 	}
 	if fx.elements[1].gap {
-		peakIdx := fx.getPeakIdx()
-		if peakIdx < 0 {
-			peakIdx = beginIdx
-		}
-		biPos := -1
-		for i := range bis {
-			if bis[i].EndIndex == peakIdx {
-				biPos = i
-				break
+		if !fx.recursing {
+			// 顶层 eigenFX：搜索二次特征序列确认
+			peakIdx := fx.getPeakIdx()
+			if peakIdx < 0 {
+				peakIdx = beginIdx
 			}
+			biPos := -1
+			for i := range bis {
+				if bis[i].EndIndex == peakIdx {
+					biPos = i
+					break
+				}
+			}
+			if biPos < 0 {
+				biPos = beginIdx
+			}
+			return fx.findRevertFx(bis, biPos+1)
 		}
-		if biPos < 0 {
-			biPos = beginIdx
-		}
-		return fx.findRevertFx(bis, biPos+1)
+		// 递归子 eigenFX：直接返回不确定，避免无界递归
+		return true, false
 	}
 	if !fx.actualBreakFlag {
 		return true, false
@@ -272,6 +288,7 @@ func (fx *eigenFX) findRevertFx(bis []types.MergedBi, beginIdx int) (shouldEnd, 
 		subDir = types.DirDown
 	}
 	subFX := newEigenFX(subDir)
+	subFX.recursing = true // 阻止子 eigen 在 gap 时再次递归
 	for i := beginIdx; i < len(bis); i += 2 {
 		bi := bis[i]
 		result, _ := subFX.add(bi, bis, i)

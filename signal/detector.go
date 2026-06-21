@@ -5,24 +5,30 @@ import (
 	"strconv"
 
 	"github.com/bambuo/chan/features"
+	"github.com/bambuo/chan/force"
 	"github.com/bambuo/chan/types"
 )
 
+// boundaryToleranceFallback 中枢高度为零时的保底容差比例（ZG 的 1%）。
+const boundaryToleranceFallback = 0.01
+
 // DetectSignals 基于笔级中枢和笔序列检测全部买卖点。
+// macdHist 为 MACD histogram 序列，用于 T1P（盘背）的力度比较；
+// 若为 nil 则 T1P 退化为价格振幅判定（工程近似）。
 func DetectSignals(pivots []types.Pivot, bis []types.MergedBi, segments []types.Segment,
-	deviations []types.Deviation, config types.Config) []types.Signal {
+	deviations []types.Deviation, config types.Config, macdHist []float64) []types.Signal {
 	if len(segments) == 0 || len(bis) == 0 {
 		return nil
 	}
 	targets := parseBspTypes(config.BspType)
 	groups := groupBySeg(segments, pivots, bis)
 	bsp1Map := make(map[int]bool)
-	bsp1IdxMap := make(map[int]int) // seg.EndIndex → T1 signal K-line index
+	bsp1IdxMap := make(map[int]int)
 	bspAllMap := make(map[int]bool)
 	var signals []types.Signal
 	for gi := range groups {
 		g := &groups[gi]
-		if sig := detectT1(g, bis, deviations, config, targets); sig != nil {
+		if sig := detectT1(g, bis, deviations, config, targets, macdHist); sig != nil {
 			signals = append(signals, *sig)
 			bsp1Map[sig.Index] = true
 			bsp1IdxMap[sig.Index] = sig.Index
@@ -98,7 +104,7 @@ func (g *segGroup) multiCnt() int {
 
 // ── T1 / T1P ──
 
-func detectT1(g *segGroup, bis []types.MergedBi, devs []types.Deviation, cfg types.Config, targets map[string]bool) *types.Signal {
+func detectT1(g *segGroup, bis []types.MergedBi, devs []types.Deviation, cfg types.Config, targets map[string]bool, macdHist []float64) *types.Signal {
 	seg := g.Seg
 	endBiIdx := findEndIdx(bis, seg.EndIndex)
 	if endBiIdx < 0 {
@@ -124,7 +130,7 @@ func detectT1(g *segGroup, bis []types.MergedBi, devs []types.Deviation, cfg typ
 			}
 		}
 	}
-	return treatT1P(g, bis, cfg, targets)
+	return treatT1P(g, bis, cfg, targets, macdHist)
 }
 
 func treatT1(g *segGroup, last *types.Pivot, bis []types.MergedBi, devs []types.Deviation, cfg types.Config, targets map[string]bool) *types.Signal {
@@ -172,7 +178,7 @@ func treatT1(g *segGroup, last *types.Pivot, bis []types.MergedBi, devs []types.
 	for i := range devs {
 		d := &devs[i]
 		if d.Direction == seg.Direction && d.PriceHigh == endBi.EndPrice {
-			if d.ForceBefore > 1e-12 {
+			if d.ForceBefore > types.ForceEpsilon {
 				dr = d.ForceAfter / d.ForceBefore
 			}
 			break
@@ -184,7 +190,10 @@ func treatT1(g *segGroup, last *types.Pivot, bis []types.MergedBi, devs []types.
 	}
 }
 
-func treatT1P(g *segGroup, bis []types.MergedBi, cfg types.Config, targets map[string]bool) *types.Signal {
+// treatT1P 检测盘整背驰一买/一卖（T1P）。
+// 当 macdHist 可用时使用 MACD 力度度量（对齐缠论盘背标准），
+// 否则退化为价格振幅 Amp() 近似（保持向后兼容）。
+func treatT1P(g *segGroup, bis []types.MergedBi, cfg types.Config, targets map[string]bool, macdHist []float64) *types.Signal {
 	seg := g.Seg
 	lastIdx := findEndIdx(bis, seg.EndIndex)
 	if lastIdx < 0 || lastIdx < 2 {
@@ -201,9 +210,25 @@ func treatT1P(g *segGroup, bis []types.MergedBi, cfg types.Config, targets map[s
 		return nil
 	}
 	rate := cfg.BspDivergenceRate
-	if !(math.IsInf(rate, 1) || rate > 100) {
-		if pre.Amp() > 1e-12 && last.Amp() > rate*pre.Amp() {
-			return nil
+	if !divergenceRateSentinel(rate) {
+		if len(macdHist) > 0 {
+			// MACD 力度盘背判定（对齐缠论标准）
+			metric := force.ParseMetric(cfg.BspMacdAlgo)
+			inM := force.CalcMetric(*pre, metric, false, macdHist, nil, nil, nil, nil)
+			outM := force.CalcMetric(*last, metric, true, macdHist, nil, nil, nil, nil)
+			if inM > types.ForceEpsilon && outM <= rate*inM {
+				// 力度衰减确认为盘背，不拒绝
+			} else {
+				return nil
+			}
+		} else {
+			// 价格振幅盘背判定（工程近似，macdHist 不可用时使用）
+			if pre.Amp() <= types.ForceEpsilon {
+				return nil // 前笔振幅为零，无法做盘背比较
+			}
+			if last.Amp() > rate*pre.Amp() {
+				return nil
+			}
 		}
 	}
 	if !targets["1p"] {
@@ -283,9 +308,13 @@ func detectT2(g *segGroup, groups []segGroup, bis []types.MergedBi,
 	}
 	breakBi := &bis[b1Idx+1].Bi
 	b2Bi := &bis[b1Idx+2].Bi
+	// 方向校验：breakBi 应为反向笔（反弹/回踩），b2Bi 应为与线段同向（对齐 Python BSPointList）
+	if breakBi.Direction == seg.Direction || b2Bi.Direction != seg.Direction {
+		return nil
+	}
 	var sigs []types.Signal
 	ret := math.Inf(1)
-	if breakBi.Amp() > 1e-12 {
+	if breakBi.Amp() > types.ForceEpsilon {
 		ret = b2Bi.Amp() / breakBi.Amp()
 	}
 	b2Ok := ret <= cfg.BspMaxBs2Rate
@@ -318,7 +347,8 @@ func detectT2S(g *segGroup, _ []segGroup, bis []types.MergedBi,
 	var lo, hi *float64
 	b2Idx := b1Idx + 2
 	for b2Idx+bias < len(bis) {
-		// 对齐 Python: max_bsp2s_lv 限制搜索层级
+		// BspMaxBs2sLv 限制搜索层级（1-based：1=类二买/类二卖最近一层，2=两层，…）。
+		// nil 表示不限制层级。
 		if cfg.BspMaxBs2sLv != nil && bias/2 > *cfg.BspMaxBs2sLv {
 			break
 		}
@@ -348,7 +378,7 @@ func detectT2S(g *segGroup, _ []segGroup, bis []types.MergedBi,
 			break
 		}
 		r := math.Abs(sBi.EndVal() - breakBi.EndVal())
-		if breakBi.Amp() > 1e-12 {
+		if breakBi.Amp() > types.ForceEpsilon {
 			r /= breakBi.Amp()
 		}
 		if r > cfg.BspMaxBs2Rate {
@@ -503,11 +533,20 @@ func treatT3B(g, ng *segGroup, _ int, bis []types.MergedBi,
 }
 
 func back2ZS(bi *types.Bi, zs *types.Pivot) bool {
-	return (bi.IsDown() && bi.ZSLow() < zs.ZG) || (bi.IsUp() && bi.ZSHigh() > zs.ZD)
+	return (bi.IsDown() && bi.ZSLow() <= zs.ZG) || (bi.IsUp() && bi.ZSHigh() >= zs.ZD)
 }
 
+// breakPeak 检查回踩/回抽笔是否真正保持在突破极值之外（Bsp3Peak 工程过滤）。
+// 配合 treatT3A：b3 是与突破方向相反的回踩笔。
+//   - 三买场景（b3 向下回踩）：回踩低点必须 > 中枢波动最高点 PeakHigh（GG），
+//     即回踩未跌破中枢上沿极值，才算强势三买。
+//   - 三卖场景（b3 向上回抽）：回抽高点必须 < 中枢波动最低点 PeakLow（DD），
+//     即回抽未升破中枢下沿极值，才算强势三卖。
+//
+// 对齐缠论算法.md §8.4：标准三买用 ZG、三卖用 ZD；Bsp3Peak=true 时改用更严格的
+// PeakHigh/PeakLow（波动极值 GG/DD）作为工程增强过滤。
 func breakPeak(bi *types.Bi, zs *types.Pivot) bool {
-	return (bi.IsDown() && bi.ZSHigh() >= zs.PeakHigh) || (bi.IsUp() && bi.ZSLow() <= zs.PeakLow)
+	return (bi.IsDown() && bi.ZSLow() > zs.PeakHigh) || (bi.IsUp() && bi.ZSHigh() < zs.PeakLow)
 }
 
 func parseBspTypes(s string) map[string]bool {
@@ -522,6 +561,12 @@ func parseBspTypes(s string) map[string]bool {
 		r[p] = true
 	}
 	return r
+}
+
+// divergenceRateSentinel 判断背驰率是否为哨兵值（关闭背驰率过滤）。
+// 与 deviation.isSentinel 保持一致：+Inf 或 > 100 视为关闭过滤。
+func divergenceRateSentinel(rate float64) bool {
+	return math.IsInf(rate, 1) || rate > types.DivergenceSentinelThreshold
 }
 
 func split(s string) []string {
@@ -553,7 +598,7 @@ func overlap(l1, h1, l2, h2 float64, eq bool) bool {
 // ── 中枢边界信号（对齐 index.html 的 support/resist/breakUp/breakDn）──
 
 // detectBoundarySignals 检测中枢边界的支撑/压力/突破/跌破信号。
-// 遍历每个非单笔中枢，检查其后的笔与 ZG/ZD 的交互关系。
+// 遍历每个多笔中枢（跳过单笔中枢，因其区间不稳定），检查其后的笔与 ZG/ZD 的交互关系。
 // toleranceRatio 为 ZG/ZD 容差比例（中枢高度的百分比，默认 0.1 = 10%）。
 func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets map[string]bool, toleranceRatio float64) []types.Signal {
 	if !targets["support"] && !targets["resist"] && !targets["breakUp"] && !targets["breakDn"] {
@@ -565,11 +610,11 @@ func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets m
 	for pi := range pivots {
 		zs := &pivots[pi]
 		if zs.IsOneBiZs() {
-			continue // 跳过多笔中枢
+			continue // 跳过单笔中枢（区间不稳定，边界信号意义不大）
 		}
 		tolerance := (zs.ZG - zs.ZD) * toleranceRatio
 		if tolerance <= 0 {
-			tolerance = zs.ZG * 0.01 // 保底容差
+			tolerance = zs.ZG * boundaryToleranceFallback // 保底容差
 		}
 
 		// 从中枢结束笔之后开始扫描
@@ -582,36 +627,7 @@ func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets m
 			biLow := bi.ZSLow()
 			biHigh := bi.ZSHigh()
 
-			// 支撑：向下笔的低点接近 ZD（在容差范围内）
-			if targets["support"] && bi.IsDown() {
-				if biLow >= zs.ZD-tolerance && biLow <= zs.ZD+tolerance {
-					key := "support:" + strconv.Itoa(i)
-					if !seen[key] {
-						seen[key] = true
-						sigs = append(sigs, types.Signal{
-							Type: types.BuyPoint2, SubType: types.SubTSupport,
-							Level: "中枢边界", Index: bi.StartIndex, Price: biLow, Strength: 0.4,
-							Features: features.Common(*bi),
-						})
-					}
-				}
-			}
-
-			// 压力：向上笔的高点接近 ZG（在容差范围内）
-			if targets["resist"] && bi.IsUp() {
-				if biHigh >= zs.ZG-tolerance && biHigh <= zs.ZG+tolerance {
-					key := "resist:" + strconv.Itoa(i)
-					if !seen[key] {
-						seen[key] = true
-						sigs = append(sigs, types.Signal{
-							Type: types.SellPoint2, SubType: types.SubTResist,
-							Level: "中枢边界", Index: bi.StartIndex, Price: biHigh, Strength: 0.4,
-							Features: features.Common(*bi),
-						})
-					}
-				}
-			}
-
+			// 突破/跌破优先检测（与支撑/压力互斥）
 			// 突破：向上笔的低点 < ZG 且高点 > ZG（从下方上穿）
 			if targets["breakUp"] && bi.IsUp() {
 				if biLow < zs.ZG && biHigh > zs.ZG {
@@ -636,6 +652,40 @@ func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets m
 						sigs = append(sigs, types.Signal{
 							Type: types.SellPoint3, SubType: types.SubTBreakDn,
 							Level: "中枢边界", Index: bi.StartIndex, Price: zs.ZD, Strength: 0.5,
+							Features: features.Common(*bi),
+						})
+					}
+				}
+			}
+
+			// 支撑：向下笔的低点接近 ZD（在容差范围内）
+			// 互斥：同一 biIdx 若已产生 breakDn 则不再产生 support
+			if targets["support"] && bi.IsDown() {
+				breakDnKey := "breakDn:" + strconv.Itoa(i)
+				if !seen[breakDnKey] && biLow >= zs.ZD-tolerance && biLow <= zs.ZD+tolerance {
+					key := "support:" + strconv.Itoa(i)
+					if !seen[key] {
+						seen[key] = true
+						sigs = append(sigs, types.Signal{
+							Type: types.BuyPoint2, SubType: types.SubTSupport,
+							Level: "中枢边界", Index: bi.StartIndex, Price: biLow, Strength: 0.4,
+							Features: features.Common(*bi),
+						})
+					}
+				}
+			}
+
+			// 压力：向上笔的高点接近 ZG（在容差范围内）
+			// 互斥：同一 biIdx 若已产生 breakUp 则不再产生 resist
+			if targets["resist"] && bi.IsUp() {
+				breakUpKey := "breakUp:" + strconv.Itoa(i)
+				if !seen[breakUpKey] && biHigh >= zs.ZG-tolerance && biHigh <= zs.ZG+tolerance {
+					key := "resist:" + strconv.Itoa(i)
+					if !seen[key] {
+						seen[key] = true
+						sigs = append(sigs, types.Signal{
+							Type: types.SellPoint2, SubType: types.SubTResist,
+							Level: "中枢边界", Index: bi.StartIndex, Price: biHigh, Strength: 0.4,
 							Features: features.Common(*bi),
 						})
 					}

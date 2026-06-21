@@ -105,8 +105,8 @@ func TestDetectDeviations_EmptyPivots(t *testing.T) {
 	}
 }
 
-func TestDetectDeviations_SentinelMode(t *testing.T) {
-	// sentinel 模式 (rate=Inf) 下，出笔只要突破中枢即视为背驰
+func TestDetectDeviations_SentinelModeRequiresForceDecay(t *testing.T) {
+	// sentinel 模式 (rate=Inf) 下不做倍率过滤，但仍需后段力度小于前段力度。
 	pivots := []types.Pivot{
 		{
 			BiIn:  &types.Bi{StartIndex: 0, EndIndex: 5, Direction: types.DirDown, StartPrice: 110, EndPrice: 90},
@@ -115,8 +115,11 @@ func TestDetectDeviations_SentinelMode(t *testing.T) {
 		},
 	}
 	macdHist := make([]float64, 11)
-	for i := range macdHist {
+	for i := 0; i <= 5; i++ {
 		macdHist[i] = -1.0
+	}
+	for i := 6; i <= 10; i++ {
+		macdHist[i] = -2.0
 	}
 	macdDif := make([]float64, 11)
 	volumes := make([]float64, 11)
@@ -127,10 +130,16 @@ func TestDetectDeviations_SentinelMode(t *testing.T) {
 	cfg.BspDivergenceRate = math.Inf(1) // sentinel mode
 
 	devs := DetectDeviations(pivots, macdHist, macdDif, volumes, turnovers, closes, cfg)
+	if len(devs) != 0 {
+		t.Fatalf("expected no deviation without force decay, got %d", len(devs))
+	}
+
+	for i := 6; i <= 10; i++ {
+		macdHist[i] = -0.5
+	}
+	devs = DetectDeviations(pivots, macdHist, macdDif, volumes, turnovers, closes, cfg)
 	if len(devs) == 0 {
-		t.Log("no deviations in sentinel mode (BiOut may not break ZG/ZD)")
-	} else {
-		t.Logf("sentinel mode: %d deviations", len(devs))
+		t.Fatal("expected deviation when force decays in sentinel mode")
 	}
 }
 

@@ -8,6 +8,95 @@ import (
 	"github.com/bambuo/chan/types"
 )
 
+// TestBiBuilder_NoZeroPriceAfterDelVirt 回归测试 S7：
+// delVirt 恢复 lastEnd 时曾遗漏 High/Low 字段，导致后续 add 生成 StartPrice=0 的非法笔。
+// 此测试构造会触发 delVirt 恢复路径的序列，验证所有笔价格非零。
+func TestBiBuilder_NoZeroPriceAfterDelVirt(t *testing.T) {
+	klines, _ := sineWaveData(300)
+	cfg := alignedTestConfig()
+	fractals := detectFractalsForTest(klines, cfg)
+	bis := BuildBis(klines, fractals, cfg)
+
+	if len(bis) == 0 {
+		t.Skip("no bis generated")
+	}
+	for i, b := range bis {
+		if b.StartPrice == 0 {
+			t.Errorf("bi[%d] StartPrice=0 (S7 regression: delVirt lost High/Low)", i)
+		}
+		if b.EndPrice == 0 {
+			t.Errorf("bi[%d] EndPrice=0", i)
+		}
+		// 向上笔终点必须高于起点，向下笔终点必须低于起点
+		if b.IsUp() && b.EndPrice <= b.StartPrice {
+			t.Errorf("bi[%d] 向上笔终点 %.4f 不高于起点 %.4f", i, b.EndPrice, b.StartPrice)
+		}
+		if b.IsDown() && b.EndPrice >= b.StartPrice {
+			t.Errorf("bi[%d] 向下笔终点 %.4f 不低于起点 %.4f", i, b.EndPrice, b.StartPrice)
+		}
+	}
+}
+
+// TestBiBuilder_VirtualBiExtensionPreservesDirection 回归测试 S7：
+// tryAddVirtualBi 同向延伸曾用 Close 作为 EndPrice，导致向下笔终点高于起点（方向反转）。
+// 此测试构造尾部强势反弹的序列，验证虚笔延伸不破坏方向合法性。
+func TestBiBuilder_VirtualBiExtensionPreservesDirection(t *testing.T) {
+	// 构造：先形成一段明确的向下笔，然后尾部强势反弹（Close 远高于向下笔终点）。
+	// 修复前：虚笔同向延伸会用反弹的 Close 覆盖向下笔终点，造成 ep > sp。
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	klines := []types.Kline{}
+	// 下跌段：从 100 逐步跌到 80
+	prices := []float64{100, 98, 95, 92, 90, 88, 85, 82, 80}
+	for i, p := range prices {
+		klines = append(klines, types.Kline{
+			Time: types.DateTime{Time: base.Add(time.Duration(i) * time.Hour)},
+			Open: p + 1, High: p + 2, Low: p - 1, Close: p, BaseVolume: 1000,
+		})
+	}
+	// 尾部强势反弹：Close 从 80 飙到 120，但 Low 仍维持低位
+	// 这样向下笔的"同向延伸"条件 (Low 刷新) 不应触发；
+	// 即便触发，EndPrice 也应取 Low 而非 Close=120。
+	for i := 0; i < 10; i++ {
+		p := 80 + float64(i)*4 // Close 从 80 升到 116
+		klines = append(klines, types.Kline{
+			Time: types.DateTime{Time: base.Add(time.Duration(9+i) * time.Hour)},
+			Open: p - 2, High: p + 5, Low: 79, Close: p, BaseVolume: 1000,
+		})
+	}
+
+	cfg := alignedTestConfig()
+	// 放宽过滤以确保能成笔
+	cfg.BiStrict = false
+	fractals := detectFractalsForTest(klines, cfg)
+	bis := BuildBis(klines, fractals, cfg)
+
+	for i, b := range bis {
+		if b.IsDown() && b.EndPrice > b.StartPrice {
+			t.Errorf("bi[%d] 向下笔终点 %.2f 高于起点 %.2f (S7: 虚笔延伸用 Close 覆盖了方向极值)",
+				i, b.EndPrice, b.StartPrice)
+		}
+		if b.IsUp() && b.EndPrice < b.StartPrice {
+			t.Errorf("bi[%d] 向上笔终点 %.2f 低于起点 %.2f", i, b.EndPrice, b.StartPrice)
+		}
+	}
+}
+
+func TestMachineTruncateStateKeepsSideTablesAligned(t *testing.T) {
+	m := &machine{
+		bis:  []types.Bi{{}, {}, {}},
+		sure: []bool{true, false, true},
+		used: []bool{true, true, false},
+		ends: [][]types.Fractal{{}, {}, {}},
+	}
+
+	m.truncateState(2)
+
+	if len(m.bis) != 2 || len(m.sure) != 2 || len(m.used) != 2 || len(m.ends) != 2 {
+		t.Fatalf("state lengths not aligned after truncate: bis=%d sure=%d used=%d ends=%d",
+			len(m.bis), len(m.sure), len(m.used), len(m.ends))
+	}
+}
+
 // TestBiBuilder_TrailingVirtualBi 测试 tryAddVirtualBi：末尾K线能构成虚拟笔。
 func TestBiBuilder_TrailingVirtualBi(t *testing.T) {
 	klines, _ := sineWaveData(200)

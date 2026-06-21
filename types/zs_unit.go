@@ -172,7 +172,7 @@ func (bi Bi) EndFractalType() FractalType {
 
 // ToEndFractal 从笔构造其终点分型。
 func (bi Bi) ToEndFractal() Fractal {
-	return Fractal{Index: bi.EndIndex, Type: bi.EndFractalType(), High: bi.EndPrice, Low: bi.EndPrice}
+	return Fractal{Index: bi.EndIndex, Type: bi.EndFractalType(), High: bi.High, Low: bi.Low}
 }
 
 // IsOneBiZs 判断是否单笔中枢。

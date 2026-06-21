@@ -56,6 +56,42 @@ func TestCalcTrendMetrics(t *testing.T) {
 	}
 }
 
+func TestClassifyTrendsRequiresSamePivotDirection(t *testing.T) {
+	pivots := []types.Pivot{
+		{StartIndex: 0, EndIndex: 10, Direction: types.DirUp, GG: 110, DD: 100},
+		{StartIndex: 11, EndIndex: 20, Direction: types.DirDown, GG: 130, DD: 120},
+	}
+
+	trends := ClassifyTrends(pivots)
+	if len(trends) == 0 {
+		t.Fatal("expected range trend")
+	}
+	if trends[0].Type != types.RangeOnly {
+		t.Fatalf("expected RangeOnly for opposite-direction pivots, got %v", trends[0].Type)
+	}
+	if len(trends[0].Pivots) != 1 {
+		t.Fatalf("opposite-direction pivots must not be grouped, got %d pivots", len(trends[0].Pivots))
+	}
+}
+
+func TestClassifyTrendsGroupsSameDirectionNonOverlappingPivots(t *testing.T) {
+	pivots := []types.Pivot{
+		{StartIndex: 0, EndIndex: 10, Direction: types.DirUp, GG: 110, DD: 100},
+		{StartIndex: 11, EndIndex: 20, Direction: types.DirUp, GG: 130, DD: 120},
+	}
+
+	trends := ClassifyTrends(pivots)
+	if len(trends) != 1 {
+		t.Fatalf("expected 1 trend, got %d", len(trends))
+	}
+	if trends[0].Type != types.TrendUp {
+		t.Fatalf("expected TrendUp, got %v", trends[0].Type)
+	}
+	if len(trends[0].Pivots) != 2 {
+		t.Fatalf("expected 2 pivots in trend, got %d", len(trends[0].Pivots))
+	}
+}
+
 func TestCalcTrendMetrics_EmptyInput(t *testing.T) {
 	CalcTrendMetrics(nil, nil, nil) // should not panic
 	CalcTrendMetrics(nil, []types.Kline{}, []int{5})

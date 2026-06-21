@@ -2,6 +2,9 @@ package scoring
 
 import "github.com/bambuo/chan/types"
 
+// positionLowRatio 买入信号位于中枢 ZD 附近的比率阈值。
+const positionLowRatio = 0.3
+
 // ScoringContext 为信号评分提供上下文。
 type ScoringContext struct {
 	Signal          types.Signal
@@ -101,6 +104,10 @@ func resonanceScore(n int) float64 {
 	}
 }
 
+// liquidityScore 评估信号发生位置的流动性强度。
+// data 为合并后 K 线的流动性序列（成交额/成交量），sig.Index 是合并 K 线索引空间
+// （笔/线段的 StartIndex/EndIndex 均基于合并后 K 线，故索引空间对齐）。
+// 越界或数据不足时返回中性值 0.5，避免掩盖真实差异。
 func liquidityScore(sig types.Signal, data []float64) float64 {
 	if len(data) == 0 || sig.Index < 0 || sig.Index >= len(data) {
 		return 0.5
@@ -137,32 +144,29 @@ func positionScore(sig types.Signal, pivots []types.Pivot) float64 {
 	if len(pivots) == 0 {
 		return 0.5
 	}
+	// 只评估关联中枢（若有）或最后一个中枢，避免任意中枢误打分
+	var p *types.Pivot
+	if sig.Pivot != nil {
+		p = sig.Pivot
+	} else {
+		p = &pivots[len(pivots)-1]
+	}
+	height := p.ZG - p.ZD
 	switch sig.Type {
 	case types.BuyPoint1, types.BuyPoint2, types.BuyPoint3:
-		for _, p := range pivots {
-			if sig.Price <= p.ZD {
-				return 1.0
-			}
-			if sig.Price <= p.ZD+(p.ZG-p.ZD)*0.3 {
-				return 0.8
-			}
+		if sig.Price <= p.ZD {
+			return 1.0
+		}
+		if height > 0 && sig.Price <= p.ZD+height*positionLowRatio {
+			return 0.8
 		}
 	case types.SellPoint1, types.SellPoint2, types.SellPoint3:
-		for _, p := range pivots {
-			if sig.Price >= p.ZG {
-				return 1.0
-			}
-			if sig.Price >= p.ZG-(p.ZG-p.ZD)*0.3 {
-				return 0.8
-			}
+		if sig.Price >= p.ZG {
+			return 1.0
+		}
+		if height > 0 && sig.Price >= p.ZG-height*positionLowRatio {
+			return 0.8
 		}
 	}
 	return 0.5
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
