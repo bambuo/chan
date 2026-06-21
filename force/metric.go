@@ -6,6 +6,9 @@ import (
 	"github.com/bambuo/chan/types"
 )
 
+// epsilon 防零基值，用于避免除零和 log(0) 等数值问题。
+const epsilon = 1e-7
+
 // MetricType 枚举力度指标类型。
 type MetricType int
 
@@ -85,7 +88,7 @@ func CalcMetric(bi types.Bi, metric MetricType, isReverse bool,
 }
 
 func calcHalfArea(bi types.Bi, isReverse bool, macdHist []float64) float64 {
-	s := 1e-7
+	s := epsilon
 	if !isReverse {
 		startKlu := bi.StartIndex
 		peakMacd := safeIndex(macdHist, startKlu)
@@ -119,7 +122,7 @@ func calcHalfArea(bi types.Bi, isReverse bool, macdHist []float64) float64 {
 }
 
 func calcMACDPeak(bi types.Bi, macdHist []float64) float64 {
-	peak := 1e-7
+	peak := epsilon
 	for i := bi.StartIndex; i <= bi.EndIndex && i < len(macdHist); i++ {
 		if i < 0 {
 			continue
@@ -135,7 +138,7 @@ func calcMACDPeak(bi types.Bi, macdHist []float64) float64 {
 }
 
 func calcFullArea(bi types.Bi, macdHist []float64) float64 {
-	s := 1e-7
+	s := epsilon
 	for i := bi.StartIndex; i <= bi.EndIndex && i < len(macdHist); i++ {
 		if i < 0 {
 			continue
@@ -218,41 +221,101 @@ func calcTradeMetric(bi types.Bi, data []float64, isAvg bool) float64 {
 	return s
 }
 
+const rsiPeriod = 14 // 标准 RSI 周期
+
+// calcRsiMetric 使用标准 RSI-14 公式计算笔的力度指标。
+//
+// 对每根 K 线（从 bi.StartIndex 开始）计算 RSI，然后在 bi 范围内：
+//   - 向上笔：取 RSI 最大值（数值越高力度越强）
+//   - 向下笔：取 RSI 最小值的倒数变换（数值越低 → 返回值越大，表示下跌力度越强）
 func calcRsiMetric(bi types.Bi, closes []float64) float64 {
-	if closes == nil || len(closes) == 0 {
+	if closes == nil || len(closes) < rsiPeriod+1 {
 		return 0
 	}
-	rsiMin := math.Inf(1)
-	rsiMax := math.Inf(-1)
-	for i := bi.StartIndex; i <= bi.EndIndex && i < len(closes); i++ {
-		if i < 1 || i < 0 {
+
+	// 计算价格变化并初始化平均涨跌
+	var gains, losses []float64
+	for i := 1; i < len(closes) && i <= bi.EndIndex; i++ {
+		if i < 1 {
 			continue
 		}
-		change := closes[i] - closes[i-1]
-		rsi := 50.0 + change*10
-		if rsi < 0 {
-			rsi = 0
-		}
-		if rsi > 100 {
-			rsi = 100
-		}
-		if rsi < rsiMin {
-			rsiMin = rsi
-		}
-		if rsi > rsiMax {
-			rsiMax = rsi
+		ch := closes[i] - closes[i-1]
+		if ch > 0 {
+			gains = append(gains, ch)
+			losses = append(losses, 0)
+		} else {
+			gains = append(gains, 0)
+			losses = append(losses, -ch)
 		}
 	}
-	if bi.Direction == types.DirDown {
-		if math.IsInf(rsiMin, 1) {
-			return 0
-		}
-		return 10000.0 / (rsiMin + 1e-7)
-	}
-	if math.IsInf(rsiMax, -1) {
+	if len(gains) < rsiPeriod {
 		return 0
 	}
+
+	// Wilder 平滑 RSI
+	avgGain := mean(gains[:rsiPeriod])
+	avgLoss := mean(losses[:rsiPeriod])
+
+	rsis := make([]float64, len(gains))
+	rsi := 50.0
+	if avgLoss > 1e-12 {
+		rsi = 100.0 - 100.0/(1.0+avgGain/avgLoss)
+	}
+	rsis[rsiPeriod-1] = rsi
+
+	for i := rsiPeriod; i < len(gains); i++ {
+		avgGain = (avgGain*(rsiPeriod-1) + gains[i]) / rsiPeriod
+		avgLoss = (avgLoss*(rsiPeriod-1) + losses[i]) / rsiPeriod
+		if avgLoss > 1e-12 {
+			rsi = 100.0 - 100.0/(1.0+avgGain/avgLoss)
+		} else {
+			rsi = 100.0
+		}
+		rsis[i] = rsi
+	}
+
+	// 在 bi 范围内取极值
+	rsiMin := math.Inf(1)
+	rsiMax := math.Inf(-1)
+	start := bi.StartIndex
+	if start < rsiPeriod {
+		start = rsiPeriod - 1 // RSI 从第 rsiPeriod 个变化开始有效
+	}
+	for i := start; i <= bi.EndIndex && i < len(closes); i++ {
+		ri := i - 1 // gains/losses/rsis 的索引偏移 1
+		if ri < 0 || ri >= len(rsis) {
+			continue
+		}
+		v := rsis[ri]
+		if v < rsiMin {
+			rsiMin = v
+		}
+		if v > rsiMax {
+			rsiMax = v
+		}
+	}
+
+	if math.IsInf(rsiMin, 1) || math.IsInf(rsiMax, -1) {
+		return 0
+	}
+
+	if bi.Direction == types.DirDown {
+		// 下跌力度与 RSI 值成反比：RSI 越低 → 力度越大
+		denom := rsiMin + epsilon
+		if denom <= 0 {
+			denom = epsilon
+		}
+		return 100.0 / denom
+	}
 	return rsiMax
+}
+
+func mean(vals []float64) float64 {
+	s := 0.0
+	for _, v := range vals {
+		s += v
+	}
+	return s / float64(len(vals))
 }
 
 func safeIndex(arr []float64, idx int) float64 {

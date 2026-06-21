@@ -79,17 +79,20 @@ func DetectTrendDeviations(pivots []types.Pivot, trends []types.Trend,
 	sentinel := math.IsInf(rate, 1) || rate > 100
 	var devs []types.Deviation
 	for _, trend := range trends {
-		if len(trend.Pivots) < 2 {
+		tp := trend.Pivots
+		if len(tp) < 2 {
 			continue
 		}
-		bP := &pivots[len(pivots)-1]
+		// 取趋势的最后一个中枢作为 B（而非全局 pivots 最后一个）
+		bP := &tp[len(tp)-1]
 		if bP.BiOut == nil {
 			continue
 		}
+		// 取趋势的第一个中枢的 BiIn 作为 a（而非全局第一个有 BiIn 的中枢）
 		var aBi *types.Bi
-		for i := range pivots {
-			if pivots[i].BiIn != nil {
-				aBi = pivots[i].BiIn
+		for i := range tp {
+			if tp[i].BiIn != nil {
+				aBi = tp[i].BiIn
 				break
 			}
 		}

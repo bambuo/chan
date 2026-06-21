@@ -1,0 +1,71 @@
+package segment
+
+import "github.com/bambuo/chan/types"
+
+// simpleSegment 是 buildDef / buildDyh 的共享实现。
+//
+// 两种算法当前使用同一套简单逻辑：以连续三笔的重叠区间
+// 为线段起点，同向延伸至反向笔出现为止。
+//
+// 未来如需差异化，可在此函数内添加 algo 参数分支。
+func simpleSegment(bis []types.MergedBi, name string) []types.Segment {
+	if len(bis) < 3 {
+		return nil
+	}
+	var segs []types.Segment
+	i := 0
+	for i < len(bis) {
+		s, n := trySimpleSegment(bis, i, name)
+		if s == nil {
+			i = n
+			continue
+		}
+		segs = append(segs, *s)
+		i = n
+	}
+	return segs
+}
+
+func trySimpleSegment(bis []types.MergedBi, start int, name string) (*types.Segment, int) {
+	if start+2 >= len(bis) {
+		return nil, len(bis)
+	}
+	b0, b1, b2 := bis[start], bis[start+1], bis[start+2]
+	oh := min(min(b0.High, b1.High), b2.High)
+	ol := max(max(b0.Low, b1.Low), b2.Low)
+	if oh < ol {
+		return nil, start + 1
+	}
+	s := types.Segment{
+		StartIndex: b0.StartIndex, Direction: b0.Direction,
+		BiList: []types.MergedBi{b0, b1, b2},
+		Top:    max(max(b0.High, b1.High), b2.High),
+		Bottom: min(min(b0.Low, b1.Low), b2.Low),
+		IsSure: true,
+	}
+	s, np := extendSimpleSegment(s, bis, start+3)
+	return &s, np
+}
+
+func extendSimpleSegment(s types.Segment, bis []types.MergedBi, pos int) (types.Segment, int) {
+	for pos < len(bis) {
+		cur := bis[pos]
+		s.BiList = append(s.BiList, cur)
+		s.EndIndex = cur.EndIndex
+		if cur.High > s.Top {
+			s.Top = cur.High
+		}
+		if cur.Low < s.Bottom {
+			s.Bottom = cur.Low
+		}
+		if cur.Direction != s.Direction {
+			s.IsBroken = true
+			s.BreakType = types.BreakStd
+			s.ConfirmIndex = cur.EndIndex
+			return s, pos + 1
+		}
+		pos++
+	}
+	s.EndIndex = bis[len(bis)-1].EndIndex
+	return s, len(bis)
+}

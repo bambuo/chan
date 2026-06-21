@@ -1,6 +1,7 @@
 package deviation
 
 import (
+	"math"
 	"testing"
 
 	"github.com/bambuo/chan/force"
@@ -55,5 +56,102 @@ func TestMetricForSide_NilBi(t *testing.T) {
 	m := metricForSide(nil, cfg)
 	if m != force.Area {
 		t.Errorf("expected Area fallback for nil bi, got %d", m)
+	}
+}
+
+// ── DetectDeviations ──
+
+func TestDetectDeviations_Basic(t *testing.T) {
+	pivots := []types.Pivot{
+		{
+			BiIn:  &types.Bi{StartIndex: 0, EndIndex: 5, Direction: types.DirUp, StartPrice: 90, EndPrice: 110},
+			BiOut: &types.Bi{StartIndex: 6, EndIndex: 10, Direction: types.DirUp, StartPrice: 110, EndPrice: 130},
+			ZG:    115, ZD: 100,
+		},
+	}
+	// 构造简单的 MACD 直方图：入笔 MACD 大，出笔 MACD 小 → 背驰
+	macdHist := make([]float64, 11)
+	for i := 0; i <= 5; i++ {
+		macdHist[i] = 2.0 // BiIn 区域：大 MACD
+	}
+	for i := 6; i <= 10; i++ {
+		macdHist[i] = 0.5 // BiOut 区域：小 MACD → 背驰
+	}
+	macdDif := make([]float64, 11)
+	volumes := make([]float64, 11)
+	turnovers := make([]float64, 11)
+	closes := make([]float64, 11)
+
+	cfg := types.DefaultConfig()
+	cfg.BspDivergenceRate = 0.8 // outM <= 0.8 * inM 才视为背驰
+	cfg.BspMacdAlgo = "peak"
+
+	devs := DetectDeviations(pivots, macdHist, macdDif, volumes, turnovers, closes, cfg)
+	if len(devs) == 0 {
+		t.Log("no deviations detected (may be expected with simple mock data)")
+	} else {
+		t.Logf("detected %d deviations", len(devs))
+		for i, d := range devs {
+			t.Logf("  dev[%d]: type=%s dir=%v forceBefore=%.2f forceAfter=%.2f",
+				i, d.Type, d.Direction, d.ForceBefore, d.ForceAfter)
+		}
+	}
+}
+
+func TestDetectDeviations_EmptyPivots(t *testing.T) {
+	devs := DetectDeviations(nil, nil, nil, nil, nil, nil, types.DefaultConfig())
+	if len(devs) != 0 {
+		t.Errorf("expected 0 deviations for empty pivots, got %d", len(devs))
+	}
+}
+
+func TestDetectDeviations_SentinelMode(t *testing.T) {
+	// sentinel 模式 (rate=Inf) 下，出笔只要突破中枢即视为背驰
+	pivots := []types.Pivot{
+		{
+			BiIn:  &types.Bi{StartIndex: 0, EndIndex: 5, Direction: types.DirDown, StartPrice: 110, EndPrice: 90},
+			BiOut: &types.Bi{StartIndex: 6, EndIndex: 10, Direction: types.DirDown, StartPrice: 90, EndPrice: 70},
+			ZG:    105, ZD: 95,
+		},
+	}
+	macdHist := make([]float64, 11)
+	for i := range macdHist {
+		macdHist[i] = -1.0
+	}
+	macdDif := make([]float64, 11)
+	volumes := make([]float64, 11)
+	turnovers := make([]float64, 11)
+	closes := make([]float64, 11)
+
+	cfg := types.DefaultConfig()
+	cfg.BspDivergenceRate = math.Inf(1) // sentinel mode
+
+	devs := DetectDeviations(pivots, macdHist, macdDif, volumes, turnovers, closes, cfg)
+	if len(devs) == 0 {
+		t.Log("no deviations in sentinel mode (BiOut may not break ZG/ZD)")
+	} else {
+		t.Logf("sentinel mode: %d deviations", len(devs))
+	}
+}
+
+// ── endBiBreak ──
+
+func TestEndBiBreak_Downward(t *testing.T) {
+	out := &types.Bi{Direction: types.DirDown, StartPrice: 100, EndPrice: 80}
+	if !endBiBreak(out, 90, 85) {
+		t.Error("downward bi with end=80 < zd=85 should break")
+	}
+	if endBiBreak(out, 90, 75) {
+		t.Error("downward bi with end=80 > zd=75 should not break")
+	}
+}
+
+func TestEndBiBreak_Upward(t *testing.T) {
+	out := &types.Bi{Direction: types.DirUp, StartPrice: 80, EndPrice: 100}
+	if !endBiBreak(out, 90, 85) {
+		t.Error("upward bi with end=100 > zg=90 should break")
+	}
+	if endBiBreak(out, 105, 95) {
+		t.Error("upward bi with end=100 < zg=105 should not break")
 	}
 }

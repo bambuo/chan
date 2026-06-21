@@ -235,7 +235,7 @@ func findPeakBiIdx(bis []types.MergedBi, isHigh bool) int {
 		peakIdx := -1
 		for i := range bis {
 			bi := &bis[i]
-			if bi.Direction == types.DirUp && bi.EndPrice >= peakVal {
+			if bi.Direction == types.DirUp && bi.EndPrice > peakVal {
 				// 检查前前笔是否有更高的端点
 				if i >= 2 && bis[i-2].Direction == types.DirUp && bis[i-2].EndPrice > bi.EndPrice {
 					continue
@@ -250,7 +250,7 @@ func findPeakBiIdx(bis []types.MergedBi, isHigh bool) int {
 	peakIdx := -1
 	for i := range bis {
 		bi := &bis[i]
-		if bi.Direction == types.DirDown && bi.EndPrice <= peakVal {
+		if bi.Direction == types.DirDown && bi.EndPrice < peakVal {
 			if i >= 2 && bis[i-2].Direction == types.DirDown && bis[i-2].EndPrice < bi.EndPrice {
 				continue
 			}

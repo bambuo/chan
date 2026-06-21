@@ -2,6 +2,7 @@ package signal
 
 import (
 	"math"
+	"strconv"
 
 	"github.com/bambuo/chan/features"
 	"github.com/bambuo/chan/types"
@@ -37,7 +38,7 @@ func DetectSignals(pivots []types.Pivot, bis []types.MergedBi, segments []types.
 		signals = append(signals, detectT3(g, groups, gi, bis, bsp1Map, bsp1IdxMap, bspAllMap, config, targets)...)
 	}
 	// 中枢边界信号
-	signals = append(signals, detectBoundarySignals(pivots, bis, targets)...)
+	signals = append(signals, detectBoundarySignals(pivots, bis, targets, config.BoundaryToleranceRatio)...)
 	return signals
 }
 
@@ -551,11 +552,10 @@ func overlap(l1, h1, l2, h2 float64, eq bool) bool {
 
 // ── 中枢边界信号（对齐 index.html 的 support/resist/breakUp/breakDn）──
 
-const boundaryToleranceRatio = 0.1 // ZG/ZD 容差比例（中枢高度的 10%）
-
 // detectBoundarySignals 检测中枢边界的支撑/压力/突破/跌破信号。
 // 遍历每个非单笔中枢，检查其后的笔与 ZG/ZD 的交互关系。
-func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets map[string]bool) []types.Signal {
+// toleranceRatio 为 ZG/ZD 容差比例（中枢高度的百分比，默认 0.1 = 10%）。
+func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets map[string]bool, toleranceRatio float64) []types.Signal {
 	if !targets["support"] && !targets["resist"] && !targets["breakUp"] && !targets["breakDn"] {
 		return nil
 	}
@@ -567,7 +567,7 @@ func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets m
 		if zs.IsOneBiZs() {
 			continue // 跳过多笔中枢
 		}
-		tolerance := (zs.ZG - zs.ZD) * boundaryToleranceRatio
+		tolerance := (zs.ZG - zs.ZD) * toleranceRatio
 		if tolerance <= 0 {
 			tolerance = zs.ZG * 0.01 // 保底容差
 		}
@@ -585,7 +585,7 @@ func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets m
 			// 支撑：向下笔的低点接近 ZD（在容差范围内）
 			if targets["support"] && bi.IsDown() {
 				if biLow >= zs.ZD-tolerance && biLow <= zs.ZD+tolerance {
-					key := "support:" + itoa(i)
+					key := "support:" + strconv.Itoa(i)
 					if !seen[key] {
 						seen[key] = true
 						sigs = append(sigs, types.Signal{
@@ -600,7 +600,7 @@ func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets m
 			// 压力：向上笔的高点接近 ZG（在容差范围内）
 			if targets["resist"] && bi.IsUp() {
 				if biHigh >= zs.ZG-tolerance && biHigh <= zs.ZG+tolerance {
-					key := "resist:" + itoa(i)
+					key := "resist:" + strconv.Itoa(i)
 					if !seen[key] {
 						seen[key] = true
 						sigs = append(sigs, types.Signal{
@@ -615,7 +615,7 @@ func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets m
 			// 突破：向上笔的低点 < ZG 且高点 > ZG（从下方上穿）
 			if targets["breakUp"] && bi.IsUp() {
 				if biLow < zs.ZG && biHigh > zs.ZG {
-					key := "breakUp:" + itoa(i)
+					key := "breakUp:" + strconv.Itoa(i)
 					if !seen[key] {
 						seen[key] = true
 						sigs = append(sigs, types.Signal{
@@ -630,7 +630,7 @@ func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets m
 			// 跌破：向下笔的高点 > ZD 且低点 < ZD（从上方下穿）
 			if targets["breakDn"] && bi.IsDown() {
 				if biHigh > zs.ZD && biLow < zs.ZD {
-					key := "breakDn:" + itoa(i)
+					key := "breakDn:" + strconv.Itoa(i)
 					if !seen[key] {
 						seen[key] = true
 						sigs = append(sigs, types.Signal{
@@ -644,24 +644,4 @@ func detectBoundarySignals(pivots []types.Pivot, bis []types.MergedBi, targets m
 		}
 	}
 	return sigs
-}
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	s := ""
-	neg := false
-	if i < 0 {
-		neg = true
-		i = -i
-	}
-	for i > 0 {
-		s = string(rune('0'+i%10)) + s
-		i /= 10
-	}
-	if neg {
-		s = "-" + s
-	}
-	return s
 }

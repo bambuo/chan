@@ -10,6 +10,7 @@ type ScoringContext struct {
 	LiquidityData   []float64
 	MultiLevelCount int
 	ClosePrices     []float64
+	Weights         *types.ScoreWeights // 评分权重，nil 时使用默认值
 }
 
 // ScoreFactors 包含各项评分因子。
@@ -26,15 +27,30 @@ func ScoreSignal(ctx *ScoringContext) (float64, ScoreFactors) {
 	if ctx == nil {
 		return 0, ScoreFactors{}
 	}
+	w := defaultWeights()
+	if ctx.Weights != nil {
+		w = *ctx.Weights
+	}
 	var f ScoreFactors
 	f.LevelScore = levelScore(ctx.Signal.Level, ctx.Signal.Deviation)
 	f.DeviationScore = devForceScore(ctx.Signal.Deviation)
 	f.ResonanceScore = resonanceScore(ctx.MultiLevelCount)
 	f.LiquidityScore = liquidityScore(ctx.Signal, ctx.LiquidityData)
 	f.PositionScore = positionScore(ctx.Signal, ctx.Pivots)
-	total := f.LevelScore*0.30 + f.DeviationScore*0.25 +
-		f.ResonanceScore*0.20 + f.LiquidityScore*0.15 + f.PositionScore*0.10
+	total := f.LevelScore*w.Level + f.DeviationScore*w.Deviation +
+		f.ResonanceScore*w.Resonance + f.LiquidityScore*w.Liquidity +
+		f.PositionScore*w.Position
 	return total, f
+}
+
+func defaultWeights() types.ScoreWeights {
+	return types.ScoreWeights{
+		Level:     0.30,
+		Deviation: 0.25,
+		Resonance: 0.20,
+		Liquidity: 0.15,
+		Position:  0.10,
+	}
 }
 
 func levelScore(_ string, dev *types.Deviation) float64 {

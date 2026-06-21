@@ -8,6 +8,26 @@ type InclusionOption struct {
 	AllowTopEqual   int  // 1=顶相等不合并, -1=底相等不合并, 0=标准模式
 }
 
+// ScoreWeights 包含信号评分的各项权重（总和应约为 1.0）。
+type ScoreWeights struct {
+	Level     float64 `json:"level"`     // 级别权重（默认 0.30）
+	Deviation float64 `json:"deviation"` // 背驰权重（默认 0.25）
+	Resonance float64 `json:"resonance"` // 共振权重（默认 0.20）
+	Liquidity float64 `json:"liquidity"` // 流动性权重（默认 0.15）
+	Position  float64 `json:"position"`  // 位置权重（默认 0.10）
+}
+
+// DefaultScoreWeights 返回默认评分权重。
+func DefaultScoreWeights() ScoreWeights {
+	return ScoreWeights{
+		Level:     0.30,
+		Deviation: 0.25,
+		Resonance: 0.20,
+		Liquidity: 0.15,
+		Position:  0.10,
+	}
+}
+
 // Config 包含缠论算法的可配置参数。
 type Config struct {
 	BiMinKLineCount   int  `json:"biMinKlineCount"`
@@ -75,6 +95,15 @@ type Config struct {
 	SegBsp1OnlyMultiBiZs bool    `json:"segBsp1OnlyMultiBiZs"`
 	SegBspType           string  `json:"segBspType"`
 
+	// ── 信号评分配置 ──
+	ScoreWeights ScoreWeights `json:"scoreWeights,omitempty"`
+
+	// ── 边界信号容差（中枢 ZG/ZD 的百分比）─
+	BoundaryToleranceRatio float64 `json:"boundaryToleranceRatio"`
+
+	// ── 多级别共振容差（价格差异百分比）─
+	ResonanceTolerance float64 `json:"resonanceTolerance"`
+
 	// ── 调试选项 ──
 	DebugFractalCheck bool `json:"debugFractalCheck"` // 开启分型冲突检测日志
 	TriggerStep       bool `json:"triggerStep"`       // 启用逐 K 线增量模式
@@ -132,6 +161,10 @@ func DefaultConfig() Config {
 		SegBspDivergenceRate: math.Inf(1),
 		SegBsp1OnlyMultiBiZs: false,
 		SegBspType:           "1,1p,2,2s,3a,3b",
+
+		ScoreWeights:           DefaultScoreWeights(),
+		BoundaryToleranceRatio: 0.1,
+		ResonanceTolerance:     0.01,
 	}
 }
 

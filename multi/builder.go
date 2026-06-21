@@ -33,7 +33,7 @@ func BuildMultiLevel(baseResult *types.Result, higherKlines []types.Kline, cfg t
 	}
 
 	// 步骤 1：将基础级别线段转换为高级别笔
-	higherBis := segmentsToBis(baseResult.Segments, higherKlines)
+	higherBis := segmentsToBis(baseResult.Segments, baseResult.MergedKlines, higherKlines)
 
 	// 步骤 2：笔的包含处理
 	var higherMergedBis []types.MergedBi
@@ -77,7 +77,7 @@ func BuildMultiLevel(baseResult *types.Result, higherKlines []types.Kline, cfg t
 	higherSignals := signal.DetectSignals(higherPivots, higherMergedBis, higherSegs, higherDevs, cfg)
 
 	// 步骤 8：计算共振数
-	resonance := calcResonance(baseResult.Signals, higherSignals)
+	resonance := calcResonance(baseResult.Signals, higherSignals, cfg.ResonanceTolerance)
 
 	return &MultiLevelResult{
 		Levels: []LevelResult{
@@ -101,12 +101,13 @@ func BuildMultiLevel(baseResult *types.Result, higherKlines []types.Kline, cfg t
 
 // segmentsToBis 将基础级别线段转换为高级别笔。
 // 每个线段 → 一笔：方向由线段方向决定，高低点由线段范围决定。
-func segmentsToBis(segs []types.Segment, higherKlines []types.Kline) []types.Bi {
+// baseKlines 为基础级别的 K 线序列（合并后），用于时间戳映射到高级别 K 线索引。
+func segmentsToBis(segs []types.Segment, baseKlines, higherKlines []types.Kline) []types.Bi {
 	bis := make([]types.Bi, 0, len(segs))
 	for _, seg := range segs {
-		// 映射线段起止点到高级别 K 线索引
-		startIdx := mapIndex(seg.StartIndex, higherKlines)
-		endIdx := mapIndex(seg.EndIndex, higherKlines)
+		// 映射线段起止点到高级别 K 线索引（基于时间戳）
+		startIdx := mapIndexByTime(seg.StartIndex, baseKlines, higherKlines)
+		endIdx := mapIndexByTime(seg.EndIndex, baseKlines, higherKlines)
 		if startIdx < 0 || endIdx < 0 || startIdx >= endIdx {
 			continue
 		}
@@ -158,35 +159,57 @@ func segmentsToBis(segs []types.Segment, higherKlines []types.Kline) []types.Bi 
 	return bis
 }
 
-// mapIndex 将 K 线时间戳或原始索引映射到高级别 K 线序列中的索引。
-// 简化实现：按索引比例映射（假设基础级别和高级别时间对齐）。
-func mapIndex(baseIdx int, higherKlines []types.Kline) int {
-	// 简化映射：直接使用基础索引
-	// 实际使用中调用方应确保基础级别线段索引在高级别 K 线范围内
-	if baseIdx < 0 || baseIdx >= len(higherKlines) {
-		// 尝试找到最近的有效索引
+// mapIndexByTime 基于时间戳将基础 K 线索引映射到高级别 K 线序列中的索引。
+// 在 higherKlines 中查找第一个时间 >= baseKlines[baseIdx].Time 的位置。
+// 若 baseIdx 越界则返回最近的边界索引；若高级别 K 线均早于目标时间，返回末尾。
+func mapIndexByTime(baseIdx int, baseKlines, higherKlines []types.Kline) int {
+	if baseIdx < 0 || baseIdx >= len(baseKlines) {
 		if baseIdx < 0 {
 			return 0
 		}
+		if len(higherKlines) == 0 {
+			return -1
+		}
 		return len(higherKlines) - 1
 	}
-	return baseIdx
+	target := baseKlines[baseIdx].Time
+	if target.IsZero() {
+		// 时间戳为空时退化为恒等映射（保持向后兼容）
+		if baseIdx < 0 || baseIdx >= len(higherKlines) {
+			if baseIdx < 0 {
+				return 0
+			}
+			return len(higherKlines) - 1
+		}
+		return baseIdx
+	}
+	// 线性扫描（高级别 K 线通常远少于基础级别，性能可接受）
+	for i, k := range higherKlines {
+		if !k.Time.Before(target.Time) {
+			return i
+		}
+	}
+	return len(higherKlines) - 1
 }
 
 // calcResonance 计算两个级别的信号共振数。
 // 同一时刻（同向）出现同向买卖点计为一次共振。
-func calcResonance(baseSignals, higherSignals []types.Signal) int {
+// tolerance 为价格差异容差（百分比，默认 0.01 = 1%）。
+func calcResonance(baseSignals, higherSignals []types.Signal, tolerance float64) int {
 	if len(baseSignals) == 0 || len(higherSignals) == 0 {
 		return 0
+	}
+	if tolerance <= 0 {
+		tolerance = 0.01 // 保底容差
 	}
 	count := 0
 	for _, bs := range baseSignals {
 		for _, hs := range higherSignals {
-			// 简单共振判定：同向且价格接近（容差 1%）
+			// 简单共振判定：同向且价格接近
 			if isSameDirection(bs.Type, hs.Type) {
 				if bs.Price > 0 && hs.Price > 0 {
 					diff := math.Abs(bs.Price-hs.Price) / bs.Price
-					if diff < 0.01 {
+					if diff < tolerance {
 						count++
 						break
 					}

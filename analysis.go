@@ -257,8 +257,12 @@ func (a *Analysis) DetectSegSignals() *Analysis {
 			segDevs := deviation.DetectSegmentDeviations(
 				a.SegSignals.Pivots, a.SegSignals.Merged,
 				a.macdHist, a.macdDif, a.volumes, a.turnovers, a.closes, a.Config)
-			// 线段级偏差暂存储于 SegSignalsCtx，signal 检测使用 nil
-			_ = segDevs
+			// 存储线段级背驰到 ctx 并重新检测（使偏差参与信号判定）
+			a.SegSignals.Deviations = segDevs
+			segCfg := signal.SegBspConfig(a.Config)
+			a.SegSignals.Signals = signal.DetectSignals(
+				a.SegSignals.Pivots, a.SegSignals.Merged,
+				a.SegSignals.Segments, segDevs, segCfg)
 		}
 	}
 	return a
@@ -267,10 +271,12 @@ func (a *Analysis) DetectSegSignals() *Analysis {
 // ScoreSignals 信号评分。
 func (a *Analysis) ScoreSignals() *Analysis {
 	liq := liquidityOf(a.Klines.Items)
+	weights := a.Config.ScoreWeights
 	for i := range a.Signals {
 		s, _ := scoring.ScoreSignal(&scoring.ScoringContext{
 			Signal: a.Signals[i], Deviations: a.Deviations, Pivots: a.Pivots.Items,
 			MultiLevelCount: 1, LiquidityData: liq, ClosePrices: a.closes,
+			Weights: &weights,
 		})
 		a.Signals[i].Strength = s
 	}

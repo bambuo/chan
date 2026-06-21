@@ -13,11 +13,12 @@ import (
 
 // SegSignalsCtx 保存线段级 BSP 检测所需的全部中间产物。
 type SegSignalsCtx struct {
-	SegAsBis []types.MergedBi // 线段转换后的「高级别笔」
-	Merged   []types.MergedBi // 包含处理后的笔
-	Segments []types.Segment  // 高级别线段（seg-of-seg）
-	Pivots   []types.Pivot    // 高级别中枢
-	Signals  []types.Signal   // 检测出的线段级信号
+	SegAsBis   []types.MergedBi  // 线段转换后的「高级别笔」
+	Merged     []types.MergedBi  // 包含处理后的笔
+	Segments   []types.Segment   // 高级别线段（seg-of-seg）
+	Pivots     []types.Pivot     // 高级别中枢
+	Deviations []types.Deviation // 线段级背驰检测结果
+	Signals    []types.Signal    // 检测出的线段级信号
 }
 
 // DetectSegSignals 在已检测出的线段基础上，执行线段级买卖点检测。
@@ -54,16 +55,12 @@ func DetectSegSignals(segs []types.Segment, cfg types.Config) *SegSignalsCtx {
 	pivot.UpdateZSInSeg(ctx.Merged, ctx.Pivots)
 
 	// 步骤 5：构造线段级配置
-	segCfg := segBspConfig(cfg)
+	segCfg := SegBspConfig(cfg)
 	curPivots := ctx.Pivots
 
-	// 步骤 5b：计算线段级背驰（若 klines 数据可用则使用当前系列闭盘价）
-	var segDevs []types.Deviation
-	_ = segDevs // 占位 — 完整的偏差检测需传入 K 线级别的 MACD 数据,
-	// 由上层 Analysis.DetectDeviations 完成后在 DetectSegSignals 调用处提供
-
-	// 步骤 6：检测线段级买卖点（SegmentDeviation 偏差由上层传入或留空）
-	ctx.Signals = DetectSignals(curPivots, ctx.Merged, ctx.Segments, nil, segCfg)
+	// 步骤 6：检测线段级买卖点（偏差由上层通过 ctx.Deviations 传入，
+	// 见 analysis.go DetectSegSignals 中 segDevs 的存储和重新检测）
+	ctx.Signals = DetectSignals(curPivots, ctx.Merged, ctx.Segments, ctx.Deviations, segCfg)
 
 	return ctx
 }
@@ -118,7 +115,7 @@ func segmentsToMergedBis(segs []types.Segment) []types.MergedBi {
 }
 
 // mergeSegAsBis 对线段级笔做包含处理（合并相邻同向笔）。
-// 逻辑对齐 bi.MergeBis。
+// 逻辑对齐 bi.MergeBis，使用方向感知的合并方式。
 func mergeSegAsBis(bis []types.MergedBi) []types.MergedBi {
 	if len(bis) < 2 {
 		if len(bis) == 1 {
@@ -128,47 +125,114 @@ func mergeSegAsBis(bis []types.MergedBi) []types.MergedBi {
 	}
 	merged := make([]types.MergedBi, 0, len(bis))
 	cur := bis[0]
+	cur.MergedFrom = []int{0}
 	for i := 1; i < len(bis); i++ {
 		next := bis[i]
-		// 同向合并
-		if cur.Bi.Direction == next.Bi.Direction {
-			if cur.Bi.IsUp() {
-				if next.Bi.High <= cur.Bi.High && next.Bi.Low >= cur.Bi.Low {
-					// next 被 cur 包含
-					cur.OriginalCount++
-					continue
-				}
-				if next.Bi.High > cur.Bi.High && next.Bi.Low < cur.Bi.Low {
-					// cur 被 next 包含
-					cur = next
-					cur.OriginalCount++
-					continue
-				}
-			} else {
-				if next.Bi.Low >= cur.Bi.Low && next.Bi.High <= cur.Bi.High {
-					cur.OriginalCount++
-					continue
-				}
-				if next.Bi.Low < cur.Bi.Low && next.Bi.High > cur.Bi.High {
-					cur = next
-					cur.OriginalCount++
-					continue
-				}
-			}
+		if cur.Bi.Direction != next.Bi.Direction {
+			merged = append(merged, cur)
+			next.MergedFrom = []int{i}
+			cur = next
+			continue
+		}
+		// 同向包含处理
+		if segBiContain(next.Bi, cur.Bi) {
+			// next 被 cur 包含 → 保持 cur，更新计数
+			cur.OriginalCount++
+			cur.MergedFrom = append(cur.MergedFrom, i)
+			continue
+		}
+		if segBiContain(cur.Bi, next.Bi) {
+			// cur 被 next 包含 → 用 next 替换 cur
+			dir := segBiDir(merged, next.Bi)
+			m := segMergePair(next.Bi, cur.Bi, dir)
+			cur = types.MergedBi{Bi: m, OriginalCount: cur.OriginalCount + 1}
+			cur.MergedFrom = append(cur.MergedFrom, i)
+			continue
 		}
 		merged = append(merged, cur)
+		next.MergedFrom = []int{i}
 		cur = next
 	}
 	merged = append(merged, cur)
 	return merged
 }
 
-// segBspConfig 从基础配置构造线段级 BSP 配置。
+// segBiContain 检查 a 是否包含 b（a 的区间完全覆盖 b）。
+func segBiContain(a, b types.Bi) bool {
+	return a.High >= b.High && a.Low <= b.Low
+}
+
+// segBiDir 从已合并的笔序列推断当前合并方向。
+func segBiDir(merged []types.MergedBi, cur types.Bi) types.Direction {
+	for i := len(merged) - 1; i >= 1; i-- {
+		p, c := merged[i-1].Bi, merged[i].Bi
+		if !segBiContain(p, c) && !segBiContain(c, p) {
+			if c.High > p.High && c.Low > p.Low {
+				return types.DirUp
+			}
+			if c.High < p.High && c.Low < p.Low {
+				return types.DirDown
+			}
+		}
+	}
+	if cur.IsUp() {
+		return types.DirUp
+	}
+	return types.DirDown
+}
+
+// segMergePair 按方向合并两支同向笔。
+func segMergePair(a, b types.Bi, dir types.Direction) types.Bi {
+	m := a
+	m.EndIndex = b.EndIndex
+	m.EndPrice = b.EndPrice
+	m.KLineCount = m.EndIndex - m.StartIndex + 1
+	switch dir {
+	case types.DirUp:
+		m.High = maxF(a.High, b.High)
+		m.Low = maxF(a.Low, b.Low)
+	case types.DirDown:
+		m.High = minF(a.High, b.High)
+		m.Low = minF(a.Low, b.Low)
+	default:
+		if a.IsUp() {
+			m.High = maxF(a.High, b.High)
+			m.Low = maxF(a.Low, b.Low)
+		} else {
+			m.High = minF(a.High, b.High)
+			m.Low = minF(a.Low, b.Low)
+		}
+	}
+	m.Length = m.EndPrice - m.StartPrice
+	if m.Length < 0 {
+		m.Length = -m.Length
+	}
+	if m.KLineCount > 0 {
+		m.Slope = m.Length / float64(m.KLineCount)
+	}
+	return m
+}
+
+func maxF(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minF(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// SegBspConfig 从基础配置构造线段级 BSP 配置。
 // 对齐 Python 的 seg_bs_point_conf 覆盖规则：
 //   - macd_algo → "slope"（或用户指定的 SegBspMacdAlgo）
 //   - bsp1_only_multibi_zs → SegBsp1OnlyMultiBiZs
 //   - divergence_rate → SegBspDivergenceRate
-func segBspConfig(base types.Config) types.Config {
+func SegBspConfig(base types.Config) types.Config {
 	cfg := base
 	cfg.BspMacdAlgo = "slope"
 	if base.SegBspMacdAlgo != "" {
