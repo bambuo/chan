@@ -1,0 +1,4 @@
+github.com/bambuo/talib v0.0.0-20260617090806-66aca7a0e848 h1:PcAFXoZdoeNqVyJ0MIlD1Vq/vz2N/+bWS/pI4WghwL8=
+github.com/bambuo/talib v0.0.0-20260617090806-66aca7a0e848/go.mod h1:LxtzzikXBOYtvV9O74qAhmAFqcJBrEnp7pJ92/if9/0=
+github.com/gocarina/gocsv v0.0.0-20260607070740-0735908c6461 h1:VVnRfhuF6uyGqgcRnVK7PHOKNtiSh/YO24jfN8X/WDE=
+github.com/gocarina/gocsv v0.0.0-20260607070740-0735908c6461/go.mod h1:5YoVOkjYAQumqlV356Hj3xeYh4BdZuLE0/nRkf2NKkI=
